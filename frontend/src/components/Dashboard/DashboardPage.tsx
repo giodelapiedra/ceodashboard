@@ -5,17 +5,26 @@ import { useAuthStore } from '../../store/auth.store'
 import FetchProgress from '../common/FetchProgress'
 
 // ── Format helpers ────────────────────────────────────────────
+const DASH = '—'
 const fmtCurrency = (v: number) =>
   `$${v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const fmtPct = (v: number | null) => (v === null ? '#DIV/0!' : `${v.toFixed(2)}%`)
-const fmtInt = (v: number) => v === 0 ? '' : v.toString()
-const fmtCurrencyOrBlank = (v: number) => v === 0 ? '' : fmtCurrency(v)
+const fmtCurrencyCell = (v: number | null | undefined) =>
+  v == null || v === 0 ? DASH : fmtCurrency(v)
+const fmtIntCell = (v: number | null | undefined) =>
+  v == null || v === 0 ? DASH : v.toLocaleString('en-AU')
+const fmtPctCell = (v: number | null | undefined) =>
+  v == null ? DASH : `${v.toFixed(1)}%`
 
 // ── Colours ───────────────────────────────────────────────────
-const TEAL      = '#0f6e56'
-const NAVY      = '#1a1a2e'
-const NAVY_MID  = '#2d3561'
-const HEADER_BG = '#1e2547'
+const TEAL       = '#0f6e56'
+const TEAL_SOFT  = '#f0faf7'
+const NAVY       = '#1a1a2e'
+const HEADER_BG  = '#1e2547'
+const TEXT       = '#111827'
+const TEXT_SOFT  = '#4b5563'
+const TEXT_MUTED = '#9ca3af'
+const BORDER     = '#eef0f3'
+const ROW_ALT    = '#fafbfc'
 
 // ── Month names ───────────────────────────────────────────────
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -32,57 +41,69 @@ const CLINIC_LIST = [
 function SectionHeader({ label }: { label: string }) {
   return (
     <tr>
-      <td style={{ background: NAVY, color: '#fff', fontWeight: 600, fontSize: 11,
-        letterSpacing: '0.07em', padding: '7px 12px', textTransform: 'uppercase',
-        borderTop: '2px solid #3d4a8a' }}>
+      <td colSpan={10} style={{
+        background: NAVY, color: '#fff', fontWeight: 600, fontSize: 11,
+        letterSpacing: '0.08em', padding: '9px 16px', textTransform: 'uppercase',
+      }}>
         {label}
       </td>
-      <td colSpan={8} style={{ background: NAVY, borderTop: '2px solid #3d4a8a' }} />
     </tr>
   )
 }
 
-type CellVal = string | number | null
+type CellVal = string
 
 function DataRow({
   label, definition, wk1, wk2, wk3, wk4, rem,
-  metricType, monthly, monthlyGoal, highlight,
+  metricType, monthly, monthlyGoal, highlight, alt,
 }: {
   label: string; definition: string
   wk1: CellVal; wk2: CellVal; wk3: CellVal; wk4: CellVal; rem: CellVal
-  metricType: string; monthly: CellVal; monthlyGoal?: CellVal; highlight?: boolean
+  metricType: string; monthly: CellVal; monthlyGoal?: CellVal
+  highlight?: boolean; alt?: boolean
 }) {
-  const cellStyle = (v: CellVal): React.CSSProperties => ({
-    padding: '6px 8px', fontSize: 12, textAlign: 'center',
+  const rowBg = highlight ? TEAL_SOFT : alt ? ROW_ALT : '#fff'
+
+  const numericCell = (v: CellVal, bold = false): React.CSSProperties => ({
+    padding: '9px 12px',
+    fontSize: 12.5,
+    textAlign: 'right',
     fontFamily: "'DM Mono', monospace",
-    borderBottom: '1px solid #eef0f3',
-    color: v === '#DIV/0!' ? '#ef4444' : highlight ? TEAL : '#1a1a2e',
-    background: highlight ? '#f0faf7' : '#fff',
+    fontVariantNumeric: 'tabular-nums',
+    borderBottom: `1px solid ${BORDER}`,
+    color: v === DASH ? TEXT_MUTED : highlight ? TEAL : TEXT,
+    background: rowBg,
     whiteSpace: 'nowrap',
+    fontWeight: bold ? 600 : 400,
   })
 
   return (
-    <tr>
+    <tr className="metric-row">
       <td style={{
-        padding: '6px 12px', fontSize: 12, fontWeight: 500, color: '#111827',
-        borderBottom: '1px solid #eef0f3', background: highlight ? '#f0faf7' : '#fff',
-        minWidth: 200,
+        padding: '9px 16px', fontSize: 12.5, fontWeight: 500, color: TEXT,
+        borderBottom: `1px solid ${BORDER}`, background: rowBg,
+        minWidth: 240,
       }}>{label}</td>
       <td style={{
-        padding: '6px 12px', fontSize: 11, color: '#6b7280',
-        borderBottom: '1px solid #eef0f3', background: highlight ? '#f0faf7' : '#fff',
+        padding: '9px 14px', fontSize: 12, color: TEXT_SOFT,
+        borderBottom: `1px solid ${BORDER}`, background: rowBg,
+        minWidth: 260, lineHeight: 1.4,
       }}>{definition}</td>
-      <td style={cellStyle(wk1)}>{wk1 ?? ''}</td>
-      <td style={cellStyle(wk2)}>{wk2 ?? ''}</td>
-      <td style={cellStyle(wk3)}>{wk3 ?? ''}</td>
-      <td style={cellStyle(wk4)}>{wk4 ?? ''}</td>
-      <td style={cellStyle(rem)}>{rem ?? ''}</td>
-      <td style={{ ...cellStyle(metricType), fontSize: 10, color: '#9ca3af' }}>{metricType}</td>
-      <td style={{ ...cellStyle(monthly), fontWeight: 600, color: highlight ? TEAL : '#111827' }}>
-        {monthly ?? ''}
-      </td>
-      <td style={{ ...cellStyle(monthlyGoal ?? ''), color: '#9ca3af' }}>
-        {monthlyGoal ?? ''}
+      <td style={numericCell(wk1)}>{wk1}</td>
+      <td style={numericCell(wk2)}>{wk2}</td>
+      <td style={numericCell(wk3)}>{wk3}</td>
+      <td style={numericCell(wk4)}>{wk4}</td>
+      <td style={numericCell(rem)}>{rem}</td>
+      <td style={{
+        padding: '9px 10px', fontSize: 10, fontWeight: 500,
+        textAlign: 'center', color: TEXT_MUTED,
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+        borderBottom: `1px solid ${BORDER}`, background: rowBg,
+        whiteSpace: 'nowrap',
+      }}>{metricType || ''}</td>
+      <td style={numericCell(monthly, true)}>{monthly}</td>
+      <td style={{ ...numericCell(monthlyGoal ?? DASH), color: TEXT_MUTED }}>
+        {monthlyGoal ?? DASH}
       </td>
     </tr>
   )
@@ -90,105 +111,130 @@ function DataRow({
 
 // ── Dashboard Table ───────────────────────────────────────────
 function DashboardTable({ data }: { data: DashboardData }) {
-  const w = data.weeks  // [wk1, wk2, wk3, wk4, remainder]
+  const w = data.weeks
   const m = data.monthly
 
-  // Helper: get value from week by index (0=wk1 … 3=wk4, 4=remainder)
-  const wv = (i: number, key: keyof WeekMetrics) => {
+  const wv = <K extends keyof WeekMetrics>(i: number, key: K): WeekMetrics[K] | null => {
     const week = w[i]
     if (!week) return null
-    return week[key] as any
+    return week[key]
   }
 
-  // Currency row helper
+  // Alternating-row counter (reset per section for clean banding)
+  let rowIdx = 0
+  const nextAlt = () => (rowIdx++ % 2 === 1)
+  const resetAlt = () => { rowIdx = 0 }
+
   const crow = (
     label: string, def: string, key: keyof WeekMetrics,
     mKey: keyof MonthlyTotals, highlight = false
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={wv(0, key) ? fmtCurrency(wv(0, key)) : ''}
-      wk2={wv(1, key) ? fmtCurrency(wv(1, key)) : ''}
-      wk3={wv(2, key) ? fmtCurrency(wv(2, key)) : ''}
-      wk4={wv(3, key) ? fmtCurrency(wv(3, key)) : ''}
-      rem={wv(4, key) ? fmtCurrency(wv(4, key)) : ''}
+      wk1={fmtCurrencyCell(wv(0, key) as number | null)}
+      wk2={fmtCurrencyCell(wv(1, key) as number | null)}
+      wk3={fmtCurrencyCell(wv(2, key) as number | null)}
+      wk4={fmtCurrencyCell(wv(3, key) as number | null)}
+      rem={fmtCurrencyCell(wv(4, key) as number | null)}
       metricType="Total"
-      monthly={m[mKey] ? fmtCurrency(m[mKey] as number) : '$0.00'}
+      monthly={fmtCurrencyCell(m[mKey] as number)}
       highlight={highlight}
+      alt={!highlight && nextAlt()}
     />
   )
 
-  // Number row helper
   const nrow = (
     label: string, def: string, key: keyof WeekMetrics,
     mKey: keyof MonthlyTotals, metricType = 'Total', highlight = false
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={fmtInt(wv(0, key) ?? 0)}
-      wk2={fmtInt(wv(1, key) ?? 0)}
-      wk3={fmtInt(wv(2, key) ?? 0)}
-      wk4={fmtInt(wv(3, key) ?? 0)}
-      rem={fmtInt(wv(4, key) ?? 0)}
+      wk1={fmtIntCell(wv(0, key) as number | null)}
+      wk2={fmtIntCell(wv(1, key) as number | null)}
+      wk3={fmtIntCell(wv(2, key) as number | null)}
+      wk4={fmtIntCell(wv(3, key) as number | null)}
+      rem={fmtIntCell(wv(4, key) as number | null)}
       metricType={metricType}
-      monthly={m[mKey] !== undefined ? (m[mKey] as number).toString() : '0'}
+      monthly={fmtIntCell(m[mKey] as number)}
       highlight={highlight}
+      alt={!highlight && nextAlt()}
     />
   )
 
-  // Percent row helper
   const prow = (
     label: string, def: string, key: keyof WeekMetrics,
     mKey: keyof MonthlyTotals, highlight = false
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={fmtPct(wv(0, key))}
-      wk2={fmtPct(wv(1, key))}
-      wk3={fmtPct(wv(2, key))}
-      wk4={fmtPct(wv(3, key))}
-      rem={fmtPct(wv(4, key))}
+      wk1={fmtPctCell(wv(0, key) as number | null)}
+      wk2={fmtPctCell(wv(1, key) as number | null)}
+      wk3={fmtPctCell(wv(2, key) as number | null)}
+      wk4={fmtPctCell(wv(3, key) as number | null)}
+      rem={fmtPctCell(wv(4, key) as number | null)}
       metricType="Avg"
-      monthly={fmtPct(m[mKey] as number | null)}
+      monthly={fmtPctCell(m[mKey] as number | null)}
       highlight={highlight}
+      alt={!highlight && nextAlt()}
     />
   )
 
-  const colHeader = (text: string, sub?: string) => (
+  const emptyRow = (label: string, def: string, metricType = 'Total', monthly = DASH) => (
+    <DataRow
+      label={label} definition={def}
+      wk1={DASH} wk2={DASH} wk3={DASH} wk4={DASH} rem={DASH}
+      metricType={metricType} monthly={monthly}
+      alt={nextAlt()}
+    />
+  )
+
+  const colHeader = (text: string, sub?: string, align: 'left' | 'right' | 'center' = 'right') => (
     <th style={{
-      padding: '8px 6px', textAlign: 'center', fontSize: 11, fontWeight: 600,
+      padding: '12px 12px', textAlign: align, fontSize: 11, fontWeight: 600,
       color: '#fff', background: HEADER_BG, whiteSpace: 'nowrap',
       borderRight: '1px solid rgba(255,255,255,0.08)',
+      position: 'sticky', top: 0, zIndex: 1,
+      letterSpacing: '0.03em',
     }}>
-      {text}{sub && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.7 }}>{sub}</div>}
+      {text}
+      {sub && <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.55, marginTop: 3 }}>{sub}</div>}
     </th>
   )
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+    <div className="print-table-wrap" style={{ overflowX: 'auto', maxHeight: '72vh', overflowY: 'auto' }}>
+      <style>{`
+        .metric-row { transition: background 0.12s }
+        .metric-row:hover td { background: #f5f7fa !important }
+      `}</style>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
         <thead>
           <tr>
-            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11,
+            <th style={{
+              padding: '12px 16px', textAlign: 'left', fontSize: 11,
               fontWeight: 700, color: '#fff', background: HEADER_BG,
-              letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              letterSpacing: '0.07em', textTransform: 'uppercase',
+              position: 'sticky', top: 0, zIndex: 1,
+            }}>
               Metrics
             </th>
-            <th style={{ padding: '10px 12px', textAlign: 'left', fontSize: 11,
+            <th style={{
+              padding: '12px 14px', textAlign: 'left', fontSize: 11,
               fontWeight: 600, color: '#fff', background: HEADER_BG,
-              borderRight: '1px solid rgba(255,255,255,0.08)' }}>
+              borderRight: '1px solid rgba(255,255,255,0.08)',
+              position: 'sticky', top: 0, zIndex: 1,
+              letterSpacing: '0.03em',
+            }}>
               Definition
             </th>
-            {/* Headers pulled from the backend so they follow the real calendar */}
             {[0, 1, 2, 3, 4].map(i => {
               const label = data.weeks[i]?.label ?? ''
-              // label is like "Week 1 [2-6]" or "Remainder [1-3]"
-              const m = label.match(/^(.+?)\s*(\[[^\]]*\])?$/)
-              const title    = m?.[1] ?? label
-              const subtitle = m?.[2] ?? ''
+              const parsed = label.match(/^(.+?)\s*(\[[^\]]*\])?$/)
+              const title    = parsed?.[1] ?? label
+              const subtitle = parsed?.[2] ?? ''
               return <React.Fragment key={i}>{colHeader(title, subtitle)}</React.Fragment>
             })}
-            {colHeader('Metric Type')}
+            {colHeader('Metric Type', undefined, 'center')}
             {colHeader('Monthly Actual')}
             {colHeader('Monthly Goal')}
           </tr>
@@ -197,6 +243,7 @@ function DashboardTable({ data }: { data: DashboardData }) {
 
           {/* ── FINANCES ── */}
           <SectionHeader label="Finances $$$" />
+          {(resetAlt(), null)}
           {crow('Total Revenue',
             'Total revenue collected in last 7 days',
             'totalRevenue', 'totalRevenue', true)}
@@ -209,48 +256,30 @@ function DashboardTable({ data }: { data: DashboardData }) {
           {crow('Cash Collected from Insurance Patients',
             'Cash collected from insurance patients last 7 days',
             'cashFromInsurance', 'cashFromInsurance')}
-          <DataRow
-            label="Projected Revenue from Insurance Patients"
-            definition="Projected revenue from insurance claims etc last 7 days"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="" monthly="$0.00"
-          />
-          <DataRow
-            label="Debt Collection"
-            definition="Total revenue sent to debt collection (all time)"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="Total" monthly="$0.00"
-          />
+          {emptyRow('Projected Revenue from Insurance Patients',
+            'Projected revenue from insurance claims etc last 7 days', '')}
+          {emptyRow('Debt Collection',
+            'Total revenue sent to debt collection (all time)')}
 
           {/* ── MARKETING ── */}
           <SectionHeader label="Marketing" />
-          <DataRow
-            label="New Opt Ins To The List"
-            definition="Total number of new opt ins to our email list in last 7 days"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="Total" monthly="0"
-          />
+          {(resetAlt(), null)}
+          {emptyRow('New Opt Ins To The List',
+            'Total number of new opt ins to our email list in last 7 days')}
           {nrow('New Patients',
             'Total number of new patients in the last 7 days',
             'newPatients', 'newPatients', 'Total', true)}
           {nrow('Patient Reactivations (New Episodes)',
             'Total number of patient reactivations in the last 7 days',
             'patientReactivations', 'patientReactivations')}
-          <DataRow
-            label="Ad Spend"
-            definition="Total ad spend across all campaigns for last 7 days"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="" monthly=""
-          />
-          <DataRow
-            label="Cost Per Patient"
-            definition="Total ad spend / number of new patients"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="Total" monthly="$0.00"
-          />
+          {emptyRow('Ad Spend',
+            'Total ad spend across all campaigns for last 7 days', '')}
+          {emptyRow('Cost Per Patient',
+            'Total ad spend / number of new patients')}
 
           {/* ── SALES ── */}
           <SectionHeader label="Sales (Service & Product Delivery)" />
+          {(resetAlt(), null)}
           {nrow('Total Number of Patients For The Week',
             'Total number of patients in the calendar for the last 7 days',
             'totalPatients', 'totalPatients', 'Total', true)}
@@ -281,24 +310,12 @@ function DashboardTable({ data }: { data: DashboardData }) {
           {nrow('Clients Who Accepted a Product or Upsell',
             'Number of clients who accepted a product or upsell in the last 7 days',
             'productsUpsold', 'productsUpsold')}
-          <DataRow
-            label="Clients Who Transitioned To A Complementary Service"
-            definition="Number of clients who transitioned to a complementary service in last 7 days"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="Total" monthly="0"
-          />
-          <DataRow
-            label="Active Patients"
-            definition="Total number of active patients in treatment in the last 7 days"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="Avg" monthly="0"
-          />
-          <DataRow
-            label="Inactive Patients"
-            definition="Total number of inactive patients not in treatment (all time)"
-            wk1="" wk2="" wk3="" wk4="" rem=""
-            metricType="" monthly=""
-          />
+          {emptyRow('Clients Who Transitioned To A Complementary Service',
+            'Number of clients who transitioned to a complementary service in last 7 days')}
+          {emptyRow('Active Patients',
+            'Total number of active patients in treatment in the last 7 days', 'Avg')}
+          {emptyRow('Inactive Patients',
+            'Total number of inactive patients not in treatment (all time)', '')}
 
         </tbody>
       </table>
@@ -329,24 +346,21 @@ export default function DashboardPage() {
     }
   }, [clinic, month, year])
 
-  // Auto-fetch whenever the selection changes (including preset clicks).
   useEffect(() => { fetchData() }, [fetchData])
 
   const currentClinic = CLINIC_LIST.find(c => c.id === clinic)
-
   const years = [2025, 2026, 2027]
 
-  // ── Quick date presets, Nookal-style ──────────────────────────
   const applyMonthOffset = (offset: number) => {
     const d = new Date(now.getFullYear(), now.getMonth() + offset, 1)
     setMonth(d.getMonth() + 1)
     setYear(d.getFullYear())
   }
   const presets = [
-    { label: 'This Month',     offset:  0 },
-    { label: 'Last Month',     offset: -1 },
-    { label: '2 Months Ago',   offset: -2 },
-    { label: '3 Months Ago',   offset: -3 },
+    { label: 'This Month',   offset:  0 },
+    { label: 'Last Month',   offset: -1 },
+    { label: '2 Months Ago', offset: -2 },
+    { label: '3 Months Ago', offset: -3 },
   ]
   const activePresetOffset = (() => {
     for (const p of presets) {
@@ -357,7 +371,7 @@ export default function DashboardPage() {
   })()
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f0f2f5', fontFamily: "'DM Sans', sans-serif" }}>
+    <div className="print-root" style={{ minHeight: '100vh', background: '#f0f2f5', fontFamily: "'DM Sans', sans-serif" }}>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
         @keyframes fadeIn { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:none } }
@@ -365,10 +379,84 @@ export default function DashboardPage() {
         .clinic-btn.active { background: #0f6e56 !important; color: #fff !important; border-color: #0f6e56 !important }
         .fetch-btn:hover:not(:disabled) { background: #0a5040 !important }
         select:focus { outline: none; border-color: #0f6e56; box-shadow: 0 0 0 2px rgba(15,110,86,0.15) }
+
+        /* ── Print styles ─────────────────────────────────────── */
+        @media print {
+          @page { size: 297mm 210mm; margin: 8mm }   /* A4 landscape, explicit */
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important }
+          html, body { background: #fff !important; margin: 0 !important; padding: 0 !important }
+          .no-print { display: none !important }
+
+          .print-root {
+            background: #fff !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            min-height: 0 !important;
+          }
+          .print-area { padding: 0 !important; margin: 0 !important }
+
+          .print-card {
+            border: 1px solid #d1d5db !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+          }
+
+          /* Table wrapper: disable scroll, let it flow on paper */
+          .print-table-wrap {
+            max-height: none !important;
+            overflow: visible !important;
+          }
+          .print-table-wrap table {
+            min-width: 0 !important;
+            width: 100% !important;
+            table-layout: fixed !important;
+          }
+
+          /* Repeat header on every page */
+          .print-table-wrap thead { display: table-header-group }
+          .print-table-wrap tfoot { display: table-footer-group }
+
+          /* Don't split rows across pages */
+          .print-table-wrap tr { page-break-inside: avoid; break-inside: avoid }
+
+          /* Allow first two columns (Metric + Definition) to wrap — numerics stay nowrap */
+          .print-table-wrap th:nth-child(1),
+          .print-table-wrap th:nth-child(2),
+          .print-table-wrap td:nth-child(1),
+          .print-table-wrap td:nth-child(2) {
+            white-space: normal !important;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            min-width: 0 !important;
+          }
+
+          /* Proportional column widths for landscape A4 */
+          .print-table-wrap th:nth-child(1)  { width: 17% !important }
+          .print-table-wrap th:nth-child(2)  { width: 21% !important }
+          .print-table-wrap th:nth-child(3),
+          .print-table-wrap th:nth-child(4),
+          .print-table-wrap th:nth-child(5),
+          .print-table-wrap th:nth-child(6),
+          .print-table-wrap th:nth-child(7)  { width: 7.2% !important }
+          .print-table-wrap th:nth-child(8)  { width: 5% !important }
+          .print-table-wrap th:nth-child(9)  { width: 8% !important }
+          .print-table-wrap th:nth-child(10) { width: 7% !important }
+
+          /* Tighter, readable */
+          .print-table-wrap th,
+          .print-table-wrap td {
+            padding: 4px 6px !important;
+            font-size: 8.5pt !important;
+            line-height: 1.3 !important;
+          }
+          .print-table-wrap th { position: static !important; font-size: 8pt !important }
+          .metric-row:hover td { background: inherit !important }
+        }
       `}</style>
 
       {/* ── Header ── */}
-      <div style={{
+      <div className="no-print" style={{
         background: NAVY, color: '#fff',
         padding: '0 28px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -402,13 +490,11 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Controls Bar ── */}
-      <div style={{
+      <div className="no-print" style={{
         background: '#fff', borderBottom: '1px solid #e5e7eb',
         padding: '14px 28px',
         display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap',
       }}>
-
-        {/* Clinic selector */}
         <div style={{ display: 'flex', gap: 6 }}>
           {CLINIC_LIST.map(c => (
             <button
@@ -430,7 +516,6 @@ export default function DashboardPage() {
 
         <div style={{ width: 1, height: 28, background: '#e5e7eb' }} />
 
-        {/* Quick date presets — Nookal-style */}
         <div style={{ display: 'flex', gap: 6 }}>
           {presets.map(p => {
             const isActive = activePresetOffset === p.offset
@@ -455,7 +540,6 @@ export default function DashboardPage() {
 
         <div style={{ width: 1, height: 28, background: '#e5e7eb' }} />
 
-        {/* Month selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>Month</span>
           <select
@@ -486,7 +570,6 @@ export default function DashboardPage() {
           </select>
         </div>
 
-        {/* Fetch button */}
         <button
           className="fetch-btn"
           onClick={() => fetchData(true)}
@@ -515,7 +598,24 @@ export default function DashboardPage() {
           ) : '↻ Refresh'}
         </button>
 
-        {/* Last fetched */}
+        <button
+          onClick={() => window.print()}
+          disabled={!data || loading}
+          style={{
+            background: '#fff', color: TEXT,
+            border: '1px solid #e5e7eb', borderRadius: 7,
+            padding: '8px 16px', fontSize: 13, fontWeight: 500,
+            cursor: !data || loading ? 'not-allowed' : 'pointer',
+            opacity: !data || loading ? 0.5 : 1,
+            fontFamily: "'DM Sans', sans-serif",
+            transition: 'all 0.15s',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}
+          title="Print dashboard (Ctrl+P)"
+        >
+          🖨 Print
+        </button>
+
         {data && (
           <span style={{ fontSize: 12, color: '#9ca3af' }}>
             {currentClinic?.name} · {MONTHS[data.month - 1]} {data.year} · fetched in {data.duration}ms
@@ -523,9 +623,8 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* ── Error ── */}
       {error && (
-        <div style={{
+        <div className="no-print" style={{
           margin: '20px 28px 0',
           background: '#fef2f2', border: '1px solid #fecaca',
           borderRadius: 8, padding: '12px 16px',
@@ -537,7 +636,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── Table area ── */}
-      <div style={{ padding: '20px 28px', animation: data ? 'fadeIn 0.3s ease' : 'none' }}>
+      <div className="print-area" style={{ padding: '20px 28px', animation: data ? 'fadeIn 0.3s ease' : 'none' }}>
         {loading ? (
           <FetchProgress active={loading} clinicName={currentClinic?.name} />
         ) : !data ? (
@@ -558,15 +657,14 @@ export default function DashboardPage() {
             </div>
           </div>
         ) : (
-          <div style={{
+          <div className="print-card" style={{
             background: '#fff', borderRadius: 12,
             border: '1px solid #e5e7eb', overflow: 'hidden',
             boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
           }}>
-            {/* Dashboard title bar */}
             <div style={{
               background: HEADER_BG, color: '#fff',
-              padding: '12px 20px',
+              padding: '14px 22px',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
               <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '0.02em' }}>
@@ -580,11 +678,11 @@ export default function DashboardPage() {
 
             {/* Footer */}
             <div style={{
-              padding: '8px 14px', background: '#f9fafb',
+              padding: '10px 18px', background: '#f9fafb',
               borderTop: '1px solid #e5e7eb',
-              fontSize: 11, color: '#9ca3af',
+              fontSize: 11, color: TEXT_MUTED,
               fontFamily: "'DM Mono', monospace",
-              display: 'flex', gap: 24,
+              display: 'flex', gap: 24, flexWrap: 'wrap',
             }}>
               {data.weeks.map(w => (
                 <span key={w.weekNum}>

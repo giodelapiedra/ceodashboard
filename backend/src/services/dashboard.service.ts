@@ -1,5 +1,8 @@
 import { revenueService } from './revenue.service';
 import { cashInsuranceService } from './cash-insurance.service';
+import { upfrontRevenueService } from './upfront-revenue.service';
+import { patientMetricsService } from './patient-metrics.service';
+import { NookalDataCache } from './nookal-v3/data-cache';
 import { calculateMonthlyTotals } from './kpi.calculator';
 import { getWeekRanges, getMonthRange } from './week.calculator';
 import { snapshotRepository } from '../repositories/snapshot.repository';
@@ -17,11 +20,17 @@ function isFresh(fetchedAt: Date): boolean {
   return ageMs < env.SNAPSHOT_TTL_MINUTES * 60 * 1000;
 }
 
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export const dashboardService = {
   async getMonthly(
-    clinic: Clinic,
-    year: number,
-    month: number,
+    clinic:       Clinic,
+    year:         number,
+    month:        number,
     forceRefresh: boolean
   ): Promise<DashboardResult> {
     const startedAt = Date.now();
@@ -51,46 +60,66 @@ export const dashboardService = {
 };
 
 /**
- * Build monthly dashboard from v3 GraphQL. Weeks are Mon-Fri work-weeks, so
- * summing them MISSES weekend revenue. For the "Monthly Actual" column we
- * fetch the full month (1..lastDay) in parallel and override the summed
- * totals. This keeps the weekly breakdown clean while the monthly total
- * matches Nookal's own month-range Revenue Report exactly.
+ * Build monthly dashboard from v3 GraphQL using a shared data cache:
+ * one fetch per data type for the whole month (±7 days overfetch for
+ * boundary entries), then each service filters the cached data in-process
+ * per week / for the monthly total.
+ *
+ * Before optimisation: 24 Nookal round-trip chains (~13s).
+ * After:                4 Nookal round-trip chains (~3-5s typical).
  */
 async function fetchFromNookal(
   clinic: Clinic,
-  year: number,
-  month: number
+  year:   number,
+  month:  number
 ): Promise<MonthlyDashboard> {
   const weekRanges = getWeekRanges(year, month);
   const monthRange = getMonthRange(year, month);
+
   console.log(`[dashboard] v3: fetching ${clinic.name} ${month}/${year}`);
 
+  // Shared cache — widen by 7 days so entries filter with after-midnight
+  // fallback (used by revenue.service) has the data it needs.
+  const cache = new NookalDataCache(
+    addDays(monthRange.dateFrom, -7),
+    addDays(monthRange.dateTo,   +7),
+  );
+  await cache.warm(clinic.v3LocationId);
+
+  // Run every per-week and the monthly aggregation in parallel, all
+  // reading from the shared cache (no extra Nookal traffic).
   const weeksPromise = Promise.all(
     weekRanges.map(async (week) => {
       console.log(`  -> ${week.label} (${week.dateFrom} .. ${week.dateTo})`);
-      const [revenue, insurance] = await Promise.all([
-        revenueService.getReport(clinic, week.dateFrom, week.dateTo),
-        cashInsuranceService.getReport(clinic, week.dateFrom, week.dateTo),
+      const [revenue, insurance, upfront, patients] = await Promise.all([
+        revenueService.getReport(clinic, week.dateFrom, week.dateTo, cache),
+        cashInsuranceService.getReport(clinic, week.dateFrom, week.dateTo, cache),
+        upfrontRevenueService.getReport(clinic, week.dateFrom, week.dateTo, cache),
+        patientMetricsService.getReport(clinic, week.dateFrom, week.dateTo, cache),
       ]);
-      return reportToWeekMetrics(week, revenue, insurance.grand.total);
+      return reportToWeekMetrics(week, revenue, insurance.grand.total, upfront.total, patients);
     })
   );
 
-  const monthlyRevenuePromise = revenueService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo);
-  const monthlyInsurancePromise = cashInsuranceService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo);
+  const monthlyPromise = Promise.all([
+    revenueService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo, cache),
+    cashInsuranceService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo, cache),
+    upfrontRevenueService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo, cache),
+    patientMetricsService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo, cache),
+  ] as const);
 
-  const [weekResults, monthlyRevenue, monthlyInsurance] = await Promise.all([
-    weeksPromise, monthlyRevenuePromise, monthlyInsurancePromise,
-  ]);
+  const [weekResults, [monthlyRevenue, monthlyInsurance, monthlyUpfront, monthlyPatients]] =
+    await Promise.all([weeksPromise, monthlyPromise]);
 
   const monthly = calculateMonthlyTotals(weekResults);
-  // Override the sum-of-weeks values with the full-month figures so that
-  // "Monthly Actual" matches Nookal's month-range Revenue Report exactly
-  // (the sum of Mon-Fri weeks misses weekend activity).
-  monthly.totalRevenue        = monthlyRevenue.summary.grand.total;
-  monthly.productSalesRevenue = monthlyRevenue.summary.inventory.total;
-  monthly.cashFromInsurance   = monthlyInsurance.grand.total;
+  // "Monthly Actual" comes from the real month query (includes weekends),
+  // not from summing Mon-Fri weeks.
+  monthly.totalRevenue         = monthlyRevenue.summary.grand.total;
+  monthly.productSalesRevenue  = monthlyRevenue.summary.inventory.total;
+  monthly.cashFromInsurance    = monthlyInsurance.grand.total;
+  monthly.upfrontRevenue       = monthlyUpfront.total;
+  monthly.newPatients          = monthlyPatients.newPatients;
+  monthly.patientReactivations = monthlyPatients.patientReactivations;
 
   return {
     clinic:   clinic.name,
@@ -105,7 +134,9 @@ async function fetchFromNookal(
 function reportToWeekMetrics(
   week: WeekRange,
   r:    Awaited<ReturnType<typeof revenueService.getReport>>,
-  cashFromInsurance: number
+  cashFromInsurance: number,
+  upfrontRevenue:    number,
+  patients:          Awaited<ReturnType<typeof patientMetricsService.getReport>>
 ): WeekMetrics {
   return {
     weekNum:  week.weekNum,
@@ -113,21 +144,17 @@ function reportToWeekMetrics(
     dateFrom: week.dateFrom,
     dateTo:   week.dateTo,
 
-    // Finance — populated from the v3 revenue report (Nookal-parity)
     totalRevenue:        r.summary.grand.total,
     productSalesRevenue: r.summary.inventory.total,
     cashFromInsurance,
+    upfrontRevenue,
 
-    // TODO: requires separate v3 queries
-    upfrontRevenue:      0,
     debtCollection:      0,
 
-    // TODO: needs v3 `clients` query
-    newPatients:          0,
-    patientReactivations: 0,
+    newPatients:          patients.newPatients,
+    patientReactivations: patients.patientReactivations,
     newOptIns:            0,
 
-    // TODO: needs v3 `appointments` query
     totalPatients:            0,
     appointmentsAttended:     0,
     appointmentsCancelled:    0,

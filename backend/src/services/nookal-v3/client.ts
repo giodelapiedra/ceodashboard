@@ -45,6 +45,15 @@ export interface GraphQLResponse<T> {
 }
 
 class UnauthorizedError extends Error {}
+class TransientError extends Error {
+  constructor(public readonly status: number, message: string) { super(message); }
+}
+
+/** Transient 5xx retries: 3 attempts, exponential backoff 400ms → 800ms → 1600ms. */
+const TRANSIENT_MAX_ATTEMPTS = 3;
+const TRANSIENT_BASE_DELAY_MS = 400;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 class NookalV3Client {
   private http:         AxiosInstance;
@@ -104,11 +113,16 @@ class NookalV3Client {
     }
   }
 
-  /** Execute a GraphQL query. Automatically refreshes token on 401. */
+  /**
+   * Execute a GraphQL query.
+   * - Automatically refreshes the token on 401 / "token expired".
+   * - Retries up to 3x on transient 5xx responses from Nookal with
+   *   exponential backoff (they sometimes return 502/503 mid-query).
+   */
   async query<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
     const attempt = async (): Promise<T> => {
       const token = await this.getAccessToken();
-      const res = await this.http.post<GraphQLResponse<T>>(
+      const res = await this.http.post<GraphQLResponse<T> | string>(
         '/graphql',
         { query, variables },
         {
@@ -117,37 +131,66 @@ class NookalV3Client {
             'Content-Type':  'application/json',
           },
           validateStatus: () => true,
+          // Nookal's 502 HTML page fails to parse as JSON; keep it as text.
+          transformResponse: [(data) => data],
         }
       );
 
-      const rawBody = JSON.stringify(res.data);
-      // Nookal returns 400 with "Token has expired" — treat as auth failure
-      // so we refresh-and-retry, not as a permanent error.
-      const isExpired = /token has expired|please supply a current bearer/i.test(rawBody);
+      const rawBody = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      let parsed: GraphQLResponse<T> | null = null;
+      try { parsed = typeof res.data === 'string' ? JSON.parse(res.data) : (res.data as GraphQLResponse<T>); }
+      catch { /* not JSON — 5xx HTML or the like */ }
 
+      // Transient gateway/server errors — let the outer loop retry.
+      if (res.status >= 500 && res.status < 600) {
+        throw new TransientError(res.status, `HTTP ${res.status}: ${rawBody.slice(0, 200)}`);
+      }
+
+      // Auth failure or token expired — refresh and retry once.
+      const isExpired = /token has expired|please supply a current bearer/i.test(rawBody);
       if (res.status === 401 || isExpired) {
         this.token = null;
         throw new UnauthorizedError();
       }
 
-      if (res.status >= 400 || res.data.errors?.length) {
-        const msg = res.data.errors?.map((e) => e.message).join('; ')
-                 ?? `HTTP ${res.status}: ${rawBody}`;
+      if (res.status >= 400 || parsed?.errors?.length) {
+        const msg = parsed?.errors?.map((e) => e.message).join('; ')
+                 ?? `HTTP ${res.status}: ${rawBody.slice(0, 200)}`;
         throw new Error(`Nookal v3 GraphQL error: ${msg}`);
       }
 
-      if (!res.data.data) {
+      if (!parsed?.data) {
         throw new Error('Nookal v3 returned empty data');
       }
-      return res.data.data;
+      return parsed.data;
     };
 
-    try {
-      return await attempt();
-    } catch (err) {
-      if (err instanceof UnauthorizedError) return attempt();
-      throw err;
+    let lastTransient: TransientError | null = null;
+    for (let i = 0; i < TRANSIENT_MAX_ATTEMPTS; i++) {
+      try {
+        return await attempt();
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          // One auth refresh-and-retry. Don't eat our transient-retry budget.
+          try { return await attempt(); }
+          catch (err2) {
+            if (err2 instanceof TransientError) { lastTransient = err2; }
+            else throw err2;
+          }
+        } else if (err instanceof TransientError) {
+          lastTransient = err;
+        } else {
+          throw err;
+        }
+        // Backoff 400ms → 800ms → 1600ms
+        if (i < TRANSIENT_MAX_ATTEMPTS - 1) {
+          const delay = TRANSIENT_BASE_DELAY_MS * Math.pow(2, i);
+          console.warn(`[nookal-v3] transient error ${lastTransient?.status}, retrying in ${delay}ms`);
+          await sleep(delay);
+        }
+      }
     }
+    throw new Error(`Nookal v3 GraphQL error: ${lastTransient?.message ?? 'exhausted retries'}`);
   }
 }
 

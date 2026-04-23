@@ -1,26 +1,25 @@
-import { nookalV3 } from './nookal-v3/client';
 import {
-  ENTRIES_BY_DATE_QUERY,
-  INVOICES_BY_ID_QUERY,
-  EntriesByDateResult,
-  InvoicesByIDResult,
   V3InvoiceEntry,
   V3InvoiceStub,
-  PAGE_LENGTH,
 } from './nookal-v3/queries';
+import {
+  fetchEntriesInRange,
+  buildInvoiceMap,
+} from './nookal-v3/fetchers';
+import { NookalDataCache } from './nookal-v3/data-cache';
 import { Clinic } from '../types';
 
 /**
- * "Cash from Insurance" / "Third Party" report.
+ * "Cash from Insurance" / "Third Party" — matches Nookal's Providers and
+ * Practice report with the "Active Provider + Third Party" filter combo.
  *
- * Matches Nookal's Reports → Providers and Practice report when the "Third
- * Party" filter is applied. The filter is: invoice.isThirdPartyInvoice == 1.
- *
- * Aggregation mirrors the Revenue Report: entries are grouped into
- * Services / Inventory buckets and aggregated with subtotal + GST + total.
- *
- * Verified 2026-04-22: Newport 13-17 Apr 2026 returns $7,105.60 services,
- * matching the Nookal UI exactly.
+ * Filter rules (verified across multiple samples 2026-04-22):
+ *   - `invoice.isThirdPartyInvoice === 1` — invoice is third-party billed.
+ *   - `entry.providerID !== 0` — entry has an assigned provider (matches
+ *     Nookal's "Active Provider" filter — admin charges with no provider
+ *     are dropped).
+ *   - `entry.date` day is in [dateFrom, dateTo] — NO after-midnight fallback
+ *     (Revenue Report uses it but this report doesn't).
  */
 
 export interface CategoryTotal {
@@ -41,7 +40,7 @@ export interface CashFromInsuranceReport {
   entryCount: number;
 }
 
-// ── helpers (mirror revenue.service) ──────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────
 
 const MONTH_NUM: Record<string, number> = {
   Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12,
@@ -54,13 +53,12 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function invoiceDayISO(nookalDate: string | null | undefined): string | null {
-  if (!nookalDate) return null;
-  const m = nookalDate.match(/^\w{3}\s+(\w{3})\s+(\d{2})\s+(\d{4})/);
+function nookalDayISO(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const m = s.match(/^\w{3}\s+(\w{3})\s+(\d{2})\s+(\d{4})/);
   if (!m) return null;
   const mon = MONTH_NUM[m[1]];
-  if (!mon) return null;
-  return `${m[3]}-${pad2(mon)}-${m[2]}`;
+  return mon ? `${m[3]}-${pad2(mon)}-${m[2]}` : null;
 }
 
 function num(v: unknown): number {
@@ -87,39 +85,17 @@ const roundBucket = (b: CategoryTotal): CategoryTotal => ({
   subtotal: round2(b.subtotal), gst: round2(b.gst), total: round2(b.total),
 });
 
-async function fetchAllEntriesWide(dateFrom: string, dateTo: string): Promise<V3InvoiceEntry[]> {
-  const nookalFrom = addDays(dateFrom, -7);
-  const nookalTo   = addDays(dateTo,   +7);
-
-  const all: V3InvoiceEntry[] = [];
-  for (let page = 1; page < 200; page++) {
-    const { invoiceEntry } = await nookalV3.query<EntriesByDateResult>(
-      ENTRIES_BY_DATE_QUERY,
-      { dateFrom: nookalFrom, dateTo: nookalTo, page, pageLength: PAGE_LENGTH }
-    );
-    if (!invoiceEntry?.length) break;
-    all.push(...invoiceEntry);
-    if (invoiceEntry.length < PAGE_LENGTH) break;
+async function loadData(
+  dateFrom: string,
+  dateTo:   string,
+  cache?:   NookalDataCache
+): Promise<{ entries: V3InvoiceEntry[]; invoiceMap: Map<number, V3InvoiceStub> }> {
+  if (cache) {
+    return { entries: await cache.entries(), invoiceMap: await cache.invoiceMap() };
   }
-  return all;
-}
-
-async function buildInvoiceMap(invoiceIds: number[]): Promise<Map<number, V3InvoiceStub>> {
-  const map = new Map<number, V3InvoiceStub>();
-  if (!invoiceIds.length) return map;
-
-  for (let i = 0; i < invoiceIds.length; i += PAGE_LENGTH) {
-    const chunk = invoiceIds.slice(i, i + PAGE_LENGTH);
-    const [active, voided] = await Promise.all([
-      nookalV3.query<InvoicesByIDResult>(INVOICES_BY_ID_QUERY,
-        { invoiceIDs: chunk, void: 0, page: 1, pageLength: PAGE_LENGTH }),
-      nookalV3.query<InvoicesByIDResult>(INVOICES_BY_ID_QUERY,
-        { invoiceIDs: chunk, void: 1, page: 1, pageLength: PAGE_LENGTH }),
-    ]);
-    for (const inv of active.invoices ?? [])  map.set(inv.invoiceID, inv);
-    for (const inv of voided.invoices ?? [])  map.set(inv.invoiceID, inv);
-  }
-  return map;
+  const entries = await fetchEntriesInRange(addDays(dateFrom, -7), addDays(dateTo, +7));
+  const invoiceMap = await buildInvoiceMap([...new Set(entries.map((e) => e.invoiceID))]);
+  return { entries, invoiceMap };
 }
 
 // ── Public API ────────────────────────────────────────────────────
@@ -128,11 +104,11 @@ export const cashInsuranceService = {
   async getReport(
     clinic:   Clinic,
     dateFrom: string,
-    dateTo:   string
+    dateTo:   string,
+    cache?:   NookalDataCache
   ): Promise<CashFromInsuranceReport> {
     const targetLocation = clinic.v3LocationId;
-    const entries = await fetchAllEntriesWide(dateFrom, dateTo);
-    const invoiceMap = await buildInvoiceMap([...new Set(entries.map((e) => e.invoiceID))]);
+    const { entries, invoiceMap } = await loadData(dateFrom, dateTo, cache);
 
     const services  = emptyBucket();
     const inventory = emptyBucket();
@@ -146,18 +122,10 @@ export const cashInsuranceService = {
       if (!inv) continue;
       if (inv.locationID !== targetLocation) continue;
       if (inv.isThirdPartyInvoice !== 1) continue;
-      // Mirror Nookal's "Active Provider" filter: it looks at the ENTRY's
-      // own providerID (not the invoice's practitionerID). Invoice-level
-      // practitioner can be set while individual entries (merchant fees,
-      // admin charges within the same invoice) have null providerID — and
-      // Nookal excludes those.
       if (!entry.providerID || entry.providerID === 0) continue;
 
-      // Filter strictly by entry.date — the Providers and Practice report
-      // does NOT use the after-midnight fallback that the Revenue Report
-      // does. Verified across Feb 2025, Feb 2026, Apr 2026 samples.
-      const entryDay = invoiceDayISO(entry.date);
-      if (!entryDay || entryDay < dateFrom || entryDay > dateTo) continue;
+      const day = nookalDayISO(entry.date);
+      if (!day || day < dateFrom || day > dateTo) continue;
 
       entryCount++;
       const b = bucketFor(entry.itemType);
@@ -169,8 +137,7 @@ export const cashInsuranceService = {
     return {
       clinicId:   clinic.id,
       clinicName: clinic.name,
-      dateFrom,
-      dateTo,
+      dateFrom, dateTo,
       services:  roundBucket(services),
       inventory: roundBucket(inventory),
       other:     roundBucket(other),

@@ -126,3 +126,129 @@ export interface V3Payment {
 export interface PaymentsByDateResult {
   payments: V3Payment[];
 }
+
+// Account credits (a.k.a. "Upfront Revenue") — matches Nookal's
+// Reports → Account Credits screen.
+export const CREDITS_BY_DATE_QUERY = /* GraphQL */ `
+  query CreditsByDate($dateFrom: String!, $dateTo: String!, $page: Int!, $pageLength: Int!) {
+    credits(
+      dateFrom:   $dateFrom,
+      dateTo:     $dateTo,
+      page:       $page,
+      pageLength: $pageLength
+    ) {
+      creditID
+      locationID
+      clientID
+      method
+      amount
+      invoiceID
+      date
+      void
+      fromAdjustment
+    }
+  }
+`;
+
+export interface V3Credit {
+  creditID:       number;
+  locationID:     number;
+  clientID:       number;
+  method:         string | null;
+  amount:         number;
+  invoiceID:      number;
+  date:           string;
+  void:           number;
+  fromAdjustment: number;
+}
+
+export interface CreditsByDateResult {
+  credits: V3Credit[];
+}
+
+// ── Clients & Cases (used by patient-metrics.service) ─────────────
+
+export const CLIENTS_BY_ID_QUERY = /* GraphQL */ `
+  query ClientsByID($ids: [Int], $page: Int!, $pageLength: Int!) {
+    clients(clientIDs: $ids, page: $page, pageLength: $pageLength) {
+      clientID
+      dateCreated
+      registrationDate
+    }
+  }
+`;
+
+export interface V3ClientStub {
+  clientID:         number;
+  dateCreated:      string;
+  registrationDate: string;
+}
+
+export interface ClientsByIDResult {
+  clients: V3ClientStub[];
+}
+
+export const CASES_BY_ID_QUERY = /* GraphQL */ `
+  query CasesByID($caseIDs: [Int], $page: Int!, $pageLength: Int!) {
+    cases(caseIDs: $caseIDs, page: $page, pageLength: $pageLength) {
+      caseID
+      clientID
+      dateAdded
+      primaryProviderID
+    }
+  }
+`;
+
+export interface V3CaseStub {
+  caseID:            number;
+  clientID:          number;
+  dateAdded:         string;
+  primaryProviderID: number | null;
+}
+
+export interface CasesByIDResult {
+  cases: V3CaseStub[];
+}
+
+// ── Appointments (source for New Client / New Case metrics) ──────
+
+export const APPOINTMENTS_BY_DATE_QUERY = /* GraphQL */ `
+  query AppointmentsByDate(
+    $locationIDs: [Int], $dateFrom: String!, $dateTo: String!,
+    $page: Int!, $pageLength: Int!
+  ) {
+    appointments(
+      locationIDs: $locationIDs,
+      dateFrom:    $dateFrom,
+      dateTo:      $dateTo,
+      page:        $page,
+      pageLength:  $pageLength
+    ) {
+      apptID
+      clientID
+      providerID
+      caseID
+      appointmentDate
+      isNewClient
+      isNewCase
+      arrived
+      status
+    }
+  }
+`;
+
+export interface V3Appointment {
+  apptID:          number;
+  clientID:        number;
+  providerID:      number | null;
+  caseID:          number | null;
+  appointmentDate: string;
+  isNewClient:     number;   // 0 / 1
+  isNewCase:       number;
+  arrived:         number;
+  status:          string | null;
+}
+
+export interface AppointmentsByDateResult {
+  appointments: V3Appointment[];
+}

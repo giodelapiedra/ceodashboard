@@ -4,6 +4,8 @@ import { dashboardService } from '../services/dashboard.service';
 import { nookalService } from '../services/nookal.service';
 import { revenueService } from '../services/revenue.service';
 import { cashInsuranceService } from '../services/cash-insurance.service';
+import { upfrontRevenueService } from '../services/upfront-revenue.service';
+import { patientMetricsService } from '../services/patient-metrics.service';
 import { calculateWeekMetrics } from '../services/kpi.calculator';
 import { CLINICS } from '../types';
 
@@ -141,6 +143,65 @@ router.get('/cash-insurance', async (req: AuthRequest, res: Response, next) => {
     }
 
     const report = await cashInsuranceService.getReport(
+      clinicData,
+      String(dateFrom),
+      String(dateTo)
+    );
+    res.json(report);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/dashboard/upfront-revenue?clinic=newport&dateFrom=2026-04-13&dateTo=2026-04-17
+// Upfront revenue = account credits issued (Nookal: Reports → Account Credits).
+router.get('/upfront-revenue', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const { clinic, dateFrom, dateTo } = req.query;
+
+    if (!clinic || !dateFrom || !dateTo) {
+      return res.status(400).json({ error: 'clinic, dateFrom, dateTo required' });
+    }
+    if (!ISO_DATE.test(String(dateFrom)) || !ISO_DATE.test(String(dateTo))) {
+      return res.status(400).json({ error: 'dateFrom and dateTo must be YYYY-MM-DD' });
+    }
+
+    const clinicData = CLINICS.find((c) => c.id === clinic);
+    if (!clinicData) {
+      return res.status(400).json({ error: `Unknown clinic: ${clinic}` });
+    }
+
+    const report = await upfrontRevenueService.getReport(
+      clinicData,
+      String(dateFrom),
+      String(dateTo)
+    );
+    res.json(report);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/dashboard/patient-metrics?clinic=newport&dateFrom=2026-04-13&dateTo=2026-04-17
+// New Patients (truly new to the practice) + Patient Reactivations
+// (existing clients starting a new case) for a clinic/date range.
+router.get('/patient-metrics', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const { clinic, dateFrom, dateTo } = req.query;
+
+    if (!clinic || !dateFrom || !dateTo) {
+      return res.status(400).json({ error: 'clinic, dateFrom, dateTo required' });
+    }
+    if (!ISO_DATE.test(String(dateFrom)) || !ISO_DATE.test(String(dateTo))) {
+      return res.status(400).json({ error: 'dateFrom and dateTo must be YYYY-MM-DD' });
+    }
+
+    const clinicData = CLINICS.find((c) => c.id === clinic);
+    if (!clinicData) {
+      return res.status(400).json({ error: `Unknown clinic: ${clinic}` });
+    }
+
+    const report = await patientMetricsService.getReport(
       clinicData,
       String(dateFrom),
       String(dateTo)
