@@ -34,18 +34,43 @@ import {
  * Clinicians referenced in the sheet (Tim, Caitlin, Isabella, Noah, Gabby,
  * Kyle) are auto-provisioned as CLINICIAN-role users in the `newport`
  * clinic on first run, with email pattern `<firstname>@physioward.com.au`
- * and a printed temporary password (they should change it on first login).
+ * and a temporary password from IMPORT_CLINICIAN_TEMP_PASSWORD (they should change it on first login).
  *
  * Usage:
  *   npm run db:import:dropouts                    # dry-run
- *   npm run db:import:dropouts -- --commit        # actually insert
- *   npm run db:import:dropouts -- --xlsx <path>   # override source file
+ *   npm run db:import:dropouts -- --commit       # insert (needs IMPORT_* env below)
+ *   npm run db:import:dropouts -- --xlsx <path>  # override spreadsheet path
+ *
+ * Secrets / paths (never hardcode — use env or CLI):
+ *   IMPORT_DROPOUTS_XLSX           — default spreadsheet path if --xlsx omitted
+ *   IMPORT_CLINICIAN_TEMP_PASSWORD — required with --commit when new clinicians are created;
+ *                                    min 8 chars; users must change after first login.
  */
 
-const DEFAULT_XLSX        = 'C:/Users/GIO/Documents/2026.xlsx';
-const TARGET_CLINIC       = 'newport';
-const SOURCE_YEAR         = 2026;
-const TEMP_CLINICIAN_PWD  = 'PhysioWard2026!';
+const TARGET_CLINIC = 'newport';
+const SOURCE_YEAR   = 2026;
+
+function resolveSpreadsheetPath(cliPath: string | undefined): string {
+  const fromEnv = process.env.IMPORT_DROPOUTS_XLSX?.trim();
+  const p       = cliPath ?? fromEnv;
+  if (!p) {
+    throw new Error(
+      'Set IMPORT_DROPOUTS_XLSX in .env or pass --xlsx <path> to the import script.'
+    );
+  }
+  return p;
+}
+
+/** Required when --commit may create clinician accounts; validated before DB writes. */
+function resolveCommitClinicianTempPassword(): string {
+  const pwd = process.env.IMPORT_CLINICIAN_TEMP_PASSWORD?.trim() ?? '';
+  if (pwd.length < 8) {
+    throw new Error(
+      'IMPORT_CLINICIAN_TEMP_PASSWORD must be set (min 8 characters) when using --commit.'
+    );
+  }
+  return pwd;
+}
 
 /**
  * Manual date_logged overrides for rows where the source spreadsheet has a
@@ -221,7 +246,8 @@ function firstNameToEmail(firstName: string): string {
 
 async function ensureClinician(
   firstName: string,
-  commit: boolean
+  commit: boolean,
+  tempPasswordPlain: string
 ): Promise<{ id: string | null; created: boolean; email: string }> {
   const existing = await findClinicianByFirstName(firstName);
   if (existing) {
@@ -238,7 +264,7 @@ async function ensureClinician(
 
   if (!commit) return { id: null, created: true, email };
 
-  const passwordHash = await authService.hashPassword(TEMP_CLINICIAN_PWD);
+  const passwordHash = await authService.hashPassword(tempPasswordPlain);
   const created = await userRepository.create({
     email,
     passwordHash,
@@ -319,7 +345,8 @@ function getArg(name: string): string | undefined {
 
 export async function run(): Promise<void> {
   const commit = process.argv.includes('--commit');
-  const xlsx   = getArg('--xlsx') ?? DEFAULT_XLSX;
+  const xlsx   = resolveSpreadsheetPath(getArg('--xlsx'));
+  const clinicianTempPwd = commit ? resolveCommitClinicianTempPassword() : '';
 
   console.log(`[import] mode:   ${commit ? 'COMMIT' : 'DRY-RUN'}`);
   console.log(`[import] source: ${path.resolve(xlsx)}`);
@@ -340,7 +367,7 @@ export async function run(): Promise<void> {
   const clinicianMap = new Map<string, string>(); // sheet name → user.id
   console.log(`\n[import] provisioning clinicians:`);
   for (const name of namesInSheet) {
-    const r = await ensureClinician(name, commit);
+    const r = await ensureClinician(name, commit, clinicianTempPwd);
     if (r.id === null) {
       console.log(`  + would create  ${name.padEnd(10)}  ${r.email}  (CLINICIAN, ${TARGET_CLINIC})`);
     } else if (r.created) {
@@ -423,8 +450,9 @@ export async function run(): Promise<void> {
     }
   });
   console.log(`[import] inserted ${valid.length} rows into patient_dropouts.`);
-  console.log(`[import] new clinician temp password: ${TEMP_CLINICIAN_PWD}`);
-  console.log(`         (any account just created uses this — please change on first login)`);
+  console.log(
+    '[import] If new clinician accounts were created, they share the temporary password from IMPORT_CLINICIAN_TEMP_PASSWORD — share out-of-band and have each user change it on first login.'
+  );
 }
 
 if (require.main === module) {

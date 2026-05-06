@@ -8,10 +8,8 @@ dist/
 build/
 out/
 
-# Environment files — NEVER commit secrets
-.env
-.env.local
-.env.*.local
+# Environment files — NEVER commit secrets (covers .env.production, .env.local, …)
+.env*
 !.env.example
 
 # Logs
