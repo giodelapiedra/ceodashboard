@@ -93,6 +93,19 @@ function bucketFor(itemType: string | null | undefined): RevenueCategory {
   return 'other';
 }
 
+/**
+ * Item codes that Nookal's API returns with `itemType="Stock"` but its own
+ * Reports → Revenue UI excludes from the Inventory total. Cause: the product
+ * has a catalog-level category override (e.g. "Service" / "Custom-fitted")
+ * in Nookal's product setup that isn't exposed via the v3 invoiceEntry API.
+ * Verified 2026-05-11 against Newport 4-8 May 2026 — the $60 ICB orthotic
+ * is the only entry in that period the dashboard counted that Nookal's UI
+ * didn't. Add items here when validation surfaces new ones.
+ */
+const EXCLUDE_FROM_REVENUE: ReadonlySet<string> = new Set<string>([
+  'ICB D100-S', // ICB Dual Density Orthotic - Full Length Small
+]);
+
 function addInto(target: CategoryTotal, entry: V3InvoiceEntry): void {
   target.subtotal += num(entry.subtotal);
   target.gst      += num(entry.tax);
@@ -143,6 +156,7 @@ export const revenueService = {
 
     for (const entry of entries) {
       if (entry.void) continue;
+      if (entry.ItemCode && EXCLUDE_FROM_REVENUE.has(entry.ItemCode)) continue;
       const inv = invoiceMap.get(entry.invoiceID);
       if (!inv || inv.locationID !== targetLocation) continue;
 

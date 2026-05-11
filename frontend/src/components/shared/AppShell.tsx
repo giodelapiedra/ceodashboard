@@ -23,8 +23,12 @@ const NAV_TREE: Record<Role, NavItem[]> = {
     { kind: 'group', label: 'Dropouts', items: [
       { page: 'admin-dropouts',           label: 'Patient Dropouts' },
       { page: 'admin-dropout-analytics',  label: 'Dropout Analytics' },
+      { page: 'dropout-entry',            label: 'Manage entries'    },
     ]},
-    { kind: 'link', page: 'admin-case-acceptance', label: 'Case Acceptance' },
+    { kind: 'group', label: 'Case Acceptance', items: [
+      { page: 'admin-case-acceptance', label: 'Reports'          },
+      { page: 'case-acceptance-entry', label: 'Manage entries'   },
+    ]},
     { kind: 'group', label: 'Admin', items: [
       { page: 'admin-users',         label: 'User Management' },
       { page: 'admin-activity-log',  label: 'Activity Log'    },

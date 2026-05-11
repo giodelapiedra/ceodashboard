@@ -120,16 +120,18 @@ export const dropoutService = {
   },
 
   async update(scope: RequestScope, id: string, patch: UpdateDropoutBody): Promise<DropoutDTO> {
-    if (scope.role === 'ADMIN') throw Errors.forbidden('ADMIN cannot edit dropout entries');
-
     const existing = await dropoutRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Dropout ${id} not found`);
 
-    if (existing.entered_by !== scope.userId) {
-      throw Errors.forbidden('You can only edit your own dropout entries');
-    }
-    if (!withinSameDayWindow(existing.created_at)) {
-      throw Errors.forbidden('Edit window has passed (24h since creation)');
+    // ADMIN can edit any entry at any time (data-correction privilege).
+    // Every change is captured in audit_log so the trail is preserved.
+    if (scope.role !== 'ADMIN') {
+      if (existing.entered_by !== scope.userId) {
+        throw Errors.forbidden('You can only edit your own dropout entries');
+      }
+      if (!withinSameDayWindow(existing.created_at)) {
+        throw Errors.forbidden('Edit window has passed (24h since creation)');
+      }
     }
 
     if (patch.clinician_id) {
@@ -155,15 +157,16 @@ export const dropoutService = {
   },
 
   async delete(scope: RequestScope, id: string): Promise<void> {
-    if (scope.role === 'ADMIN') throw Errors.forbidden('ADMIN cannot delete dropout entries');
-
     const existing = await dropoutRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Dropout ${id} not found`);
-    if (existing.entered_by !== scope.userId) {
-      throw Errors.forbidden('You can only delete your own dropout entries');
-    }
-    if (!withinSameDayWindow(existing.created_at)) {
-      throw Errors.forbidden('Delete window has passed (24h since creation)');
+
+    if (scope.role !== 'ADMIN') {
+      if (existing.entered_by !== scope.userId) {
+        throw Errors.forbidden('You can only delete your own dropout entries');
+      }
+      if (!withinSameDayWindow(existing.created_at)) {
+        throw Errors.forbidden('Delete window has passed (24h since creation)');
+      }
     }
     await dropoutRepository.delete(id);
   },

@@ -179,8 +179,11 @@ export default function CaseAcceptanceEntryPage() {
   }
 
   // Pinned-clinic users (FRONT_DESK / CLINICIAN) load clinicians from their
-  // own clinic; FRONT_DESK_GLOBAL loads from whichever clinic they pick.
-  const activeClinic: ClinicId | null = isFrontDeskGlobal
+  // own clinic; ADMIN and FRONT_DESK_GLOBAL both have null `user.clinic_id`,
+  // so they use `form.clinic_id` instead (set by the form on create, or
+  // pre-loaded from the row on edit).
+  const usesFormClinic = isFrontDeskGlobal || user.role === 'ADMIN'
+  const activeClinic: ClinicId | null = usesFormClinic
     ? (form.clinic_id ? form.clinic_id : null)
     : ((user.clinic_id as ClinicId | null) ?? null)
   useEffect(() => {
@@ -217,7 +220,7 @@ export default function CaseAcceptanceEntryPage() {
   const onSubmit = async () => {
     setError('')
 
-    if (isFrontDeskGlobal && !form.clinic_id) return setError('Clinic is required')
+    if (usesFormClinic && !form.clinic_id) return setError('Clinic is required')
     if (!form.patient_name.trim())             return setError('Patient name is required')
     if (!form.clinician_id)                    return setError('Clinician is required')
 
@@ -290,15 +293,23 @@ export default function CaseAcceptanceEntryPage() {
   }
 
   const isEditable = (row: CaseAcceptanceDTO) => {
+    // ADMIN has data-correction privilege — can edit any row at any time.
+    // Audit log captures the mutation so the trail is preserved.
+    if (user.role === 'ADMIN') return true
     if (row.entered_by !== user.id) return false
     const ageMs = Date.now() - new Date(row.created_at).getTime()
     return ageMs <= SAME_DAY_WINDOW_MS
   }
 
+  // ADMINs are blocked from creating entries (backend enforces). Show the
+  // form only when editing an existing row — never for fresh creation.
+  const showCreateForm = user.role !== 'ADMIN' || editingId !== null
+
   return (
     <AppShell title="Daily Case Recommendation & Acceptance Tracker">
       <div style={{ padding: '20px 28px' }}>
-        {/* Form card */}
+        {/* Form card — hidden for ADMINs unless they're editing an existing row */}
+        {showCreateForm && (
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           padding: 18, marginBottom: 20,
@@ -327,7 +338,7 @@ export default function CaseAcceptanceEntryPage() {
                 style={inputStyle} />
             </Field>
 
-            {isFrontDeskGlobal && (
+            {usesFormClinic && (
               <Field label="Clinic">
                 <select value={form.clinic_id}
                   onChange={e => setForm({
@@ -353,9 +364,9 @@ export default function CaseAcceptanceEntryPage() {
                 <select value={form.clinician_id}
                   onChange={e => setForm({ ...form, clinician_id: e.target.value })}
                   style={inputStyle}
-                  disabled={isFrontDeskGlobal && !form.clinic_id}>
+                  disabled={usesFormClinic && !form.clinic_id}>
                   <option value="">
-                    {isFrontDeskGlobal && !form.clinic_id
+                    {usesFormClinic && !form.clinic_id
                       ? '— Pick a clinic first —'
                       : '— Select clinician —'}
                   </option>
@@ -441,6 +452,7 @@ export default function CaseAcceptanceEntryPage() {
             </button>
           </div>
         </div>
+        )}
 
         {/* Summary cards — always visible, scoped to the active filter */}
         <SummaryCards summary={summary} />

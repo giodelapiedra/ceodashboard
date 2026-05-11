@@ -70,6 +70,11 @@ export default function App() {
     else if (page === 'admin-ceo-analytics')      page_node = <CEOAnalyticsPage />
     else if (page === 'admin-case-acceptance')    page_node = <CaseAcceptanceAdminPage />
     else if (page === 'admin-activity-log')       page_node = <AuditLogPage />
+    // ADMIN also has access to the data-entry pages so they can edit / delete
+    // any row. The create form on those pages is hidden for ADMINs (they're
+    // blocked from creating in the backend).
+    else if (page === 'case-acceptance-entry')    page_node = <CaseAcceptanceEntryPage />
+    else if (page === 'dropout-entry')            page_node = <DropoutEntryPage />
     else                                          page_node = <DashboardPage />
   } else {
     // CLINICIAN, FRONT_DESK, FRONT_DESK_GLOBAL — same two pages.

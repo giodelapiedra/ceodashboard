@@ -142,16 +142,19 @@ export const caseAcceptanceService = {
   },
 
   async update(scope: RequestScope, id: string, patch: UpdateCaseAcceptanceBody): Promise<CaseAcceptanceDTO> {
-    if (scope.role === 'ADMIN') throw Errors.forbidden('ADMIN cannot edit case acceptance entries');
-
     const existing = await caseAcceptanceRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Case acceptance ${id} not found`);
 
-    if (existing.entered_by !== scope.userId) {
-      throw Errors.forbidden('You can only edit your own case acceptance entries');
-    }
-    if (!withinSameDayWindow(existing.created_at)) {
-      throw Errors.forbidden('Edit window has passed (24h since creation)');
+    // ADMIN can edit any entry at any time (data-correction privilege). Every
+    // change is captured in audit_log so the trail is preserved. All other
+    // roles are restricted to their own entries within the 24h same-day window.
+    if (scope.role !== 'ADMIN') {
+      if (existing.entered_by !== scope.userId) {
+        throw Errors.forbidden('You can only edit your own case acceptance entries');
+      }
+      if (!withinSameDayWindow(existing.created_at)) {
+        throw Errors.forbidden('Edit window has passed (24h since creation)');
+      }
     }
 
     if (patch.clinician_id) {
@@ -184,15 +187,16 @@ export const caseAcceptanceService = {
   },
 
   async delete(scope: RequestScope, id: string): Promise<void> {
-    if (scope.role === 'ADMIN') throw Errors.forbidden('ADMIN cannot delete case acceptance entries');
-
     const existing = await caseAcceptanceRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Case acceptance ${id} not found`);
-    if (existing.entered_by !== scope.userId) {
-      throw Errors.forbidden('You can only delete your own case acceptance entries');
-    }
-    if (!withinSameDayWindow(existing.created_at)) {
-      throw Errors.forbidden('Delete window has passed (24h since creation)');
+
+    if (scope.role !== 'ADMIN') {
+      if (existing.entered_by !== scope.userId) {
+        throw Errors.forbidden('You can only delete your own case acceptance entries');
+      }
+      if (!withinSameDayWindow(existing.created_at)) {
+        throw Errors.forbidden('Delete window has passed (24h since creation)');
+      }
     }
     await caseAcceptanceRepository.delete(id);
   },
