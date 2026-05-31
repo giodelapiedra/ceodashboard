@@ -12,8 +12,8 @@ const baseUserShape = {
 };
 
 /** Roles that have NO clinic_id (cross-clinic). Mirror of the DB CHECK
- *  constraint in 008_front_desk_global_role.sql. */
-const CROSS_CLINIC_ROLES = ['ADMIN', 'FRONT_DESK_GLOBAL'] as const;
+ *  constraint in 010_adspend_role_and_table.sql. */
+const CROSS_CLINIC_ROLES = ['ADMIN', 'FRONT_DESK_GLOBAL', 'ADSPEND'] as const;
 type CrossClinicRole = typeof CROSS_CLINIC_ROLES[number];
 const isCrossClinic = (r: string): r is CrossClinicRole =>
   (CROSS_CLINIC_ROLES as readonly string[]).includes(r);

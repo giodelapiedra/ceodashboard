@@ -81,6 +81,11 @@ export interface WeekMetrics {
   newPatients: number;
   patientReactivations: number;
   newOptIns: number;
+  // Ad spend is GLOBAL (no clinic). Same figure on every clinic view; the
+  // Overall view recomputes it from raw daily totals (not summed per clinic).
+  adSpend: number;
+  // adSpend / newPatients — null when newPatients === 0 (renders "—").
+  costPerPatient: number | null;
 
   // Operations
   totalPatients: number;
@@ -118,6 +123,8 @@ export interface MonthlyTotals {
   newPatients: number;
   patientReactivations: number;
   newOptIns: number;
+  adSpend: number;                 // global, recomputed (not summed per clinic)
+  costPerPatient: number | null;   // adSpend / newPatients
 
   // Operations
   totalPatients: number;

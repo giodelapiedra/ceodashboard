@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import axios from 'axios'
 import { useAuthStore } from '../../store/auth.store'
 import { useNavStore, AppPage } from '../../store/nav.store'
 import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId } from '../../types'
@@ -32,6 +33,7 @@ const NAV_TREE: Record<Role, NavItem[]> = {
     { kind: 'group', label: 'Admin', items: [
       { page: 'admin-users',         label: 'User Management' },
       { page: 'admin-activity-log',  label: 'Activity Log'    },
+      { page: 'ad-spend-entry',      label: 'Ad Spend'        },
     ]},
   ],
   CLINICIAN: [
@@ -46,6 +48,9 @@ const NAV_TREE: Record<Role, NavItem[]> = {
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
   ],
+  ADSPEND: [
+    { kind: 'link', page: 'ad-spend-entry',        label: 'Ad Spend' },
+  ],
 }
 
 interface Props {
@@ -57,11 +62,12 @@ interface Props {
 }
 
 export default function AppShell({ children, withHeader = true, title }: Props) {
-  const { user, logout } = useAuthStore()
+  const { user, logout, accessToken } = useAuthStore()
   const { page, navigate } = useNavStore()
 
   // Single open-group state — opening one group auto-closes any other.
-  const [openGroup, setOpenGroup] = useState<string | null>(null)
+  const [openGroup, setOpenGroup]         = useState<string | null>(null)
+  const [showChangePwd, setShowChangePwd] = useState(false)
 
   if (!user) return <>{children}</>
 
@@ -125,6 +131,17 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
             </div>
           </div>
           <button
+            onClick={() => setShowChangePwd(true)}
+            style={{
+              background: 'transparent', border: '1px solid rgba(255,255,255,0.2)',
+              color: '#fff', borderRadius: 6, padding: '6px 12px',
+              fontSize: 12, fontWeight: 500, cursor: 'pointer',
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >
+            Change password
+          </button>
+          <button
             onClick={logout}
             style={{
               background: 'transparent', border: '1px solid rgba(255,255,255,0.2)',
@@ -138,6 +155,14 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
         </div>
       </header>
 
+      {showChangePwd && (
+        <ChangePasswordModal
+          accessToken={accessToken!}
+          onClose={() => setShowChangePwd(false)}
+          onSuccess={logout}
+        />
+      )}
+
       {withHeader && title && (
         <div style={{ padding: '20px 28px 0' }}>
           <h1 style={{
@@ -148,6 +173,179 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
       )}
 
       <main>{children}</main>
+    </div>
+  )
+}
+
+// ── Change Password Modal ───────────────────────────────────────────────
+
+interface ChangePwdProps {
+  accessToken: string
+  onClose:     () => void
+  onSuccess:   () => void
+}
+
+function ChangePasswordModal({ accessToken, onClose, onSuccess }: ChangePwdProps) {
+  const [currentPwd,  setCurrentPwd]  = useState('')
+  const [newPwd,      setNewPwd]      = useState('')
+  const [confirmPwd,  setConfirmPwd]  = useState('')
+  const [error,       setError]       = useState<string | null>(null)
+  const [loading,     setLoading]     = useState(false)
+  const [done,        setDone]        = useState(false)
+
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+
+    if (newPwd.length < 8) {
+      setError('New password must be at least 8 characters')
+      return
+    }
+    if (newPwd !== confirmPwd) {
+      setError('New passwords do not match')
+      return
+    }
+
+    setLoading(true)
+    try {
+      await axios.post(
+        '/api/auth/change-password',
+        { current_password: currentPwd, new_password: newPwd },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      )
+      setDone(true)
+      // Sign out after 2 s so the user sees the success message.
+      setTimeout(onSuccess, 2000)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { error?: string } } })
+          ?.response?.data?.error ?? 'Something went wrong. Try again.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '9px 12px', fontSize: 14,
+    border: '1px solid #d1d5db', borderRadius: 7,
+    fontFamily: "'DM Sans', sans-serif",
+    outline: 'none', boxSizing: 'border-box',
+  }
+  const labelStyle: React.CSSProperties = {
+    display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 5,
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(15, 23, 42, 0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div style={{
+        background: '#fff', borderRadius: 14, padding: '32px 32px 28px',
+        width: 380, boxShadow: '0 20px 50px rgba(15,23,42,0.18)',
+        fontFamily: "'DM Sans', sans-serif",
+      }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 700, color: '#111827' }}>
+          Change password
+        </h2>
+        <p style={{ margin: '0 0 22px', fontSize: 13, color: '#6b7280' }}>
+          You will be signed out on all devices after changing your password.
+        </p>
+
+        {done ? (
+          <div style={{
+            background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
+            padding: '14px 16px', color: '#15803d', fontSize: 14, fontWeight: 500,
+          }}>
+            ✓ Password changed successfully. Signing you out…
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Current password</label>
+              <input
+                type="password"
+                value={currentPwd}
+                onChange={e => setCurrentPwd(e.target.value)}
+                required
+                autoFocus
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>New password <span style={{ color: '#9ca3af', fontWeight: 400 }}>(min 8 characters)</span></label>
+              <input
+                type="password"
+                value={newPwd}
+                onChange={e => setNewPwd(e.target.value)}
+                required
+                minLength={8}
+                style={inputStyle}
+              />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={labelStyle}>Confirm new password</label>
+              <input
+                type="password"
+                value={confirmPwd}
+                onChange={e => setConfirmPwd(e.target.value)}
+                required
+                style={inputStyle}
+              />
+            </div>
+
+            {error && (
+              <div style={{
+                background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 7,
+                padding: '10px 13px', color: '#b91c1c', fontSize: 13, marginBottom: 16,
+              }}>
+                {error}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={loading}
+                style={{
+                  background: 'transparent', border: '1px solid #d1d5db',
+                  color: '#374151', borderRadius: 7, padding: '8px 18px',
+                  fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  background: loading ? '#6b7280' : TEAL,
+                  border: 'none', color: '#fff', borderRadius: 7,
+                  padding: '8px 22px', fontSize: 13, fontWeight: 600,
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >
+                {loading ? 'Saving…' : 'Change password'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   )
 }

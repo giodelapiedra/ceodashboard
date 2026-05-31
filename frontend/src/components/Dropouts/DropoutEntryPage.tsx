@@ -48,9 +48,14 @@ interface FormState {
 }
 
 function emptyForm(currentUser: User): FormState {
+  // FRONT_DESK_GLOBAL and CLINICIAN both pick clinic per entry (clinicians
+  // rotate between sites, so we don't pre-fill from their primary clinic).
+  // FRONT_DESK is pinned to their own clinic by the server.
+  const picksClinic =
+    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN'
   return {
     date_logged:                 todayISO(),
-    clinic_id:                   currentUser.role === 'FRONT_DESK_GLOBAL'
+    clinic_id:                   picksClinic
                                    ? ''
                                    : (currentUser.clinic_id ?? '') as ClinicId | '',
     clinician_id:                currentUser.role === 'CLINICIAN'  ? currentUser.id : '',
@@ -70,6 +75,11 @@ export default function DropoutEntryPage() {
 
   const isReceptionist     = user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL'
   const isFrontDeskGlobal  = user.role === 'FRONT_DESK_GLOBAL'
+  const isClinician        = user.role === 'CLINICIAN'
+  // CLINICIAN + FRONT_DESK_GLOBAL pick the entry's clinic per-entry. ADMIN
+  // can only edit (not create), but the form pre-loads clinic_id from the
+  // edited row so they see the dropdown too.
+  const picksClinic        = isClinician || isFrontDeskGlobal || user.role === 'ADMIN'
 
   const [rows,    setRows]    = useState<DropoutDTO[]>([])
   const [total,   setTotal]   = useState(0)
@@ -107,18 +117,13 @@ export default function DropoutEntryPage() {
 
   useEffect(() => { load() }, [load])
 
-  // Load clinician dropdown. Pinned-clinic users (FRONT_DESK / CLINICIAN) load
-  // from their own clinic; ADMIN and FRONT_DESK_GLOBAL both have null
-  // `user.clinic_id`, so they use `form.clinic_id` instead (set by the form
-  // on create, or pre-loaded from the row on edit).
-  const usesFormClinic = isFrontDeskGlobal || user.role === 'ADMIN'
-  const activeClinic: ClinicId | null = usesFormClinic
-    ? (form.clinic_id ? form.clinic_id : null)
-    : ((user.clinic_id as ClinicId | null) ?? null)
+  // Clinician dropdown shows EVERY active clinician across all clinics —
+  // physios rotate between sites, so the picker can't be scoped to one
+  // clinic. The fetch happens once on mount; the user's clinic choice
+  // doesn't gate which clinicians are visible.
   useEffect(() => {
-    if (!activeClinic) { setClinicians([]); return }
-    usersApi.staff('CLINICIAN', activeClinic).then(setClinicians).catch(() => {})
-  }, [activeClinic])
+    usersApi.staff('CLINICIAN').then(setClinicians).catch(() => {})
+  }, [])
 
   const startEdit = (row: DropoutDTO) => {
     setEditingId(row.id)
@@ -169,7 +174,7 @@ export default function DropoutEntryPage() {
   const onSubmit = async () => {
     setError('')
 
-    if (usesFormClinic && !form.clinic_id) return setError('Clinic is required')
+    if (picksClinic && !form.clinic_id)        return setError('Clinic is required')
     if (!form.patient_name.trim())             return setError('Patient name is required')
     if (!form.clinician_id)                    return setError('Clinician is required')
     if (!form.status)                          return setError('Status is required')
@@ -201,7 +206,9 @@ export default function DropoutEntryPage() {
         const payload: CreateDropoutPayload = {
           date_logged:                 form.date_logged,
           clinician_id:                form.clinician_id,
-          ...(isFrontDeskGlobal ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          // CLINICIAN + FRONT_DESK_GLOBAL pick clinic per entry; FRONT_DESK
+          // is pinned server-side from scope.
+          ...((isClinician || isFrontDeskGlobal) ? { clinic_id: form.clinic_id as ClinicId } : {}),
           ...(frontStaff !== undefined ? { front_staff_name: frontStaff } : {}),
           patient_name:                patientName,
           appointment_cancelled_dates: form.appointment_cancelled_dates,
@@ -314,15 +321,15 @@ export default function DropoutEntryPage() {
                 style={inputStyle} />
             </Field>
 
-            {usesFormClinic && (
+            {picksClinic && (
               <Field label="Clinic">
                 <select value={form.clinic_id}
-                  onChange={e => setForm({
-                    ...form,
-                    clinic_id:    e.target.value as ClinicId | '',
-                    clinician_id: '', // reset — clinician list reloads for the new clinic
-                  })}
-                  style={inputStyle}>
+                  // On edit, clinic is locked (the audit/scope rules apply to
+                  // the entry's original clinic). On create, the picker is
+                  // free.
+                  onChange={e => setForm({ ...form, clinic_id: e.target.value as ClinicId | '' })}
+                  disabled={editingId !== null}
+                  style={{ ...inputStyle, ...(editingId ? { background: '#f9fafb' } : {}) }}>
                   <option value="">— Select clinic —</option>
                   {CLINIC_OPTIONS.map(c => (
                     <option key={c} value={c}>{CLINIC_LABEL[c]}</option>
@@ -331,7 +338,7 @@ export default function DropoutEntryPage() {
               </Field>
             )}
 
-            {user.role === 'CLINICIAN' ? (
+            {isClinician ? (
               <Field label="Clinician">
                 <input value={user.full_name || user.email} disabled style={{ ...inputStyle, background: '#f9fafb' }} />
               </Field>
@@ -339,13 +346,8 @@ export default function DropoutEntryPage() {
               <Field label="Clinician">
                 <select value={form.clinician_id}
                   onChange={e => setForm({ ...form, clinician_id: e.target.value })}
-                  style={inputStyle}
-                  disabled={usesFormClinic && !form.clinic_id}>
-                  <option value="">
-                    {usesFormClinic && !form.clinic_id
-                      ? '— Pick a clinic first —'
-                      : '— Select clinician —'}
-                  </option>
+                  style={inputStyle}>
+                  <option value="">— Select clinician —</option>
                   {clinicians.map(c => (
                     <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
                   ))}

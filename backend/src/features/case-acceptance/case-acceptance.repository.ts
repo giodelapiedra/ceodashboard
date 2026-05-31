@@ -17,7 +17,7 @@ export interface CaseAcceptanceRow {
   appointments_booked:      number;
   prepay_offered:           boolean | null;
   prepay_accepted:          boolean | null;
-  transition_completed:     boolean | null;
+  transition_notes:         string | null;
   notes:                    string | null;
   created_at:               Date;
   updated_at:               Date;
@@ -41,7 +41,7 @@ export interface CaseAcceptanceDTO {
   case_acceptance_pct:      number | null;
   prepay_offered:           boolean | null;
   prepay_accepted:          boolean | null;
-  transition_completed:     boolean | null;
+  transition_notes:         string | null;
   notes:                    string | null;
   created_at:               string;
   updated_at:               string;
@@ -83,7 +83,7 @@ function toDTO(row: CaseAcceptanceJoinedRow): CaseAcceptanceDTO {
     case_acceptance_pct:     recs > 0 ? Math.round((booked / recs) * 10_000) / 100 : null,
     prepay_offered:          row.prepay_offered,
     prepay_accepted:         row.prepay_accepted,
-    transition_completed:    row.transition_completed,
+    transition_notes:        row.transition_notes,
     notes:                   row.notes,
     created_at:              row.created_at.toISOString(),
     updated_at:              row.updated_at.toISOString(),
@@ -115,7 +115,7 @@ export interface CreateInput {
   appointments_booked:      number;
   prepay_offered:           boolean | null;
   prepay_accepted:          boolean | null;
-  transition_completed:     boolean | null;
+  transition_notes:         string | null;
   notes:                    string | null;
 }
 
@@ -129,7 +129,7 @@ export interface UpdateInput {
   appointments_booked?:      number;
   prepay_offered?:           boolean | null;
   prepay_accepted?:          boolean | null;
-  transition_completed?:     boolean | null;
+  transition_notes?:         string | null;
   notes?:                    string | null;
 }
 
@@ -288,7 +288,7 @@ export const caseAcceptanceRepository = {
           COUNT(*) FILTER (WHERE c.treatment_plan_provided IS FALSE)::bigint  AS tp_no,
           COUNT(*) FILTER (WHERE c.prepay_offered  IS TRUE)::bigint           AS prepay_off,
           COUNT(*) FILTER (WHERE c.prepay_accepted IS TRUE)::bigint           AS prepay_acc,
-          COUNT(*) FILTER (WHERE c.transition_completed IS TRUE)::bigint      AS transitions
+          COUNT(*) FILTER (WHERE c.transition_notes IS NOT NULL AND c.transition_notes <> '')::bigint AS transitions
         FROM case_acceptances c
         WHERE ${whereSql}
       `, params),
@@ -349,14 +349,14 @@ export const caseAcceptanceRepository = {
          clinic_id, entered_by, front_staff_name, clinician_id,
          patient_name, date_logged, treatment_plan_provided,
          case_recommendations, appointments_booked,
-         prepay_offered, prepay_accepted, transition_completed, notes
+         prepay_offered, prepay_accepted, transition_notes, notes
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
         input.clinic_id, input.entered_by, input.front_staff_name, input.clinician_id,
         input.patient_name, input.date_logged, input.treatment_plan_provided,
         input.case_recommendations, input.appointments_booked,
-        input.prepay_offered, input.prepay_accepted, input.transition_completed,
+        input.prepay_offered, input.prepay_accepted, input.transition_notes,
         input.notes,
       ]
     );
@@ -376,7 +376,7 @@ export const caseAcceptanceRepository = {
     const fields: (keyof UpdateInput)[] = [
       'front_staff_name', 'clinician_id', 'patient_name', 'date_logged',
       'treatment_plan_provided', 'case_recommendations', 'appointments_booked',
-      'prepay_offered', 'prepay_accepted', 'transition_completed', 'notes',
+      'prepay_offered', 'prepay_accepted', 'transition_notes', 'notes',
     ];
 
     for (const k of fields) {
@@ -401,5 +401,53 @@ export const caseAcceptanceRepository = {
 
   async delete(id: string): Promise<void> {
     await query(`DELETE FROM case_acceptances WHERE id = $1`, [id]);
+  },
+
+  /**
+   * Per-day rollups for the CEO dashboard rows sourced from case_acceptances:
+   *   - recs / booked       → "Case Acceptance % For All Team" (weighted)
+   *   - prepayAccepted      → "Number of Clients Who Took The Upfront
+   *                            Treatment Plan Option" (count of TRUE rows)
+   *
+   * Weighted % matches the admin summary's formula
+   * (sum(booked) / sum(recs) * 100) so dashboard and admin analytics agree.
+   *
+   * `clinicId = null` → cross-clinic totals (used by the Overall view).
+   * Bypasses RequestScope: the CEO dashboard is clinic-wide regardless of
+   * the viewer's role.
+   */
+  async dailyTotals(
+    clinicId: string | null,
+    dateFrom: string,
+    dateTo:   string
+  ): Promise<Map<string, { recs: number; booked: number; prepayAccepted: number }>> {
+    const { rows } = await query<{
+      day:             Date;
+      recs:            string;
+      booked:          string;
+      prepay_accepted: string;
+    }>(
+      `SELECT
+         c.date_logged::date AS day,
+         COALESCE(SUM(c.case_recommendations), 0)::bigint              AS recs,
+         COALESCE(SUM(c.appointments_booked), 0)::bigint               AS booked,
+         COUNT(*) FILTER (WHERE c.prepay_accepted IS TRUE)::bigint     AS prepay_accepted
+         FROM case_acceptances c
+        WHERE ($1::text IS NULL OR c.clinic_id = $1)
+          AND c.date_logged >= $2::date
+          AND c.date_logged <= $3::date
+        GROUP BY c.date_logged::date`,
+      [clinicId, dateFrom, dateTo]
+    );
+    const map = new Map<string, { recs: number; booked: number; prepayAccepted: number }>();
+    for (const r of rows) {
+      const day = isoDateOnly(r.day);
+      if (day) map.set(day, {
+        recs:           Number(r.recs),
+        booked:         Number(r.booked),
+        prepayAccepted: Number(r.prepay_accepted),
+      });
+    }
+    return map;
   },
 };

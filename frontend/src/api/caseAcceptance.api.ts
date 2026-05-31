@@ -33,7 +33,7 @@ export interface CreateCaseAcceptancePayload {
   appointments_booked:      number;
   prepay_offered?:          boolean | null;
   prepay_accepted?:         boolean | null;
-  transition_completed?:    boolean | null;
+  transition_notes?:        string | null;
   notes?:                   string | null;
 }
 
@@ -47,7 +47,7 @@ export interface UpdateCaseAcceptancePayload {
   appointments_booked?:     number;
   prepay_offered?:          boolean | null;
   prepay_accepted?:         boolean | null;
-  transition_completed?:    boolean | null;
+  transition_notes?:        string | null;
   notes?:                   string | null;
 }
 

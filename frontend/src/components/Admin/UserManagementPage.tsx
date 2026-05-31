@@ -13,7 +13,7 @@ const TEXT_SOFT = '#4b5563'
 const BORDER    = '#e5e7eb'
 const DANGER    = '#b91c1c'
 
-const ROLES: Role[] = ['ADMIN', 'CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLOBAL']
+const ROLES: Role[] = ['ADMIN', 'CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLOBAL', 'ADSPEND']
 const CLINICS: ClinicId[] = ['newport', 'narrabeen', 'brookvale']
 
 interface FormState {

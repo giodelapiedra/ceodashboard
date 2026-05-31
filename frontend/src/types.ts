@@ -11,6 +11,8 @@ export interface WeekMetrics {
   newPatients: number;
   patientReactivations: number;
   newOptIns: number;
+  adSpend: number;
+  costPerPatient: number | null;
   totalPatients: number;
   appointmentsAttended: number;
   appointmentsCancelled: number;
@@ -34,6 +36,8 @@ export interface MonthlyTotals {
   newPatients: number;
   patientReactivations: number;
   newOptIns: number;
+  adSpend: number;
+  costPerPatient: number | null;
   totalPatients: number;
   appointmentsAttended: number;
   appointmentsCancelled: number;
@@ -61,17 +65,18 @@ export interface DashboardData {
 }
 
 // ── Auth / users ───────────────────────────────────────────────
-export type Role = 'ADMIN' | 'CLINICIAN' | 'FRONT_DESK' | 'FRONT_DESK_GLOBAL';
+export type Role = 'ADMIN' | 'CLINICIAN' | 'FRONT_DESK' | 'FRONT_DESK_GLOBAL' | 'ADSPEND';
 
 export const ROLE_LABEL: Record<Role, string> = {
   ADMIN:             'Admin',
   CLINICIAN:         'Clinician',
   FRONT_DESK:        'Front Desk',
   FRONT_DESK_GLOBAL: 'Front Desk (All Clinics)',
+  ADSPEND:           'Ad Spend Encoder',
 };
 
 /** Roles whose users.clinic_id is NULL (cross-clinic accounts). */
-export const CROSS_CLINIC_ROLES: readonly Role[] = ['ADMIN', 'FRONT_DESK_GLOBAL'];
+export const CROSS_CLINIC_ROLES: readonly Role[] = ['ADMIN', 'FRONT_DESK_GLOBAL', 'ADSPEND'];
 export function isCrossClinicRole(role: Role): boolean {
   return CROSS_CLINIC_ROLES.includes(role);
 }
@@ -154,6 +159,31 @@ export interface DropoutDTO {
   updated_at:                  string;
 }
 
+// ── Ad Spend ───────────────────────────────────────────────────
+// Mirror of backend/src/shared/roles.ts AD_CHANNELS.
+export const AD_CHANNELS = [
+  'Facebook',
+  'Google',
+  'Instagram',
+  'TikTok',
+  'Other',
+] as const;
+export type AdChannel = typeof AD_CHANNELS[number];
+
+// Ad spend is GLOBAL (no clinic) — one pool for the whole business.
+export interface AdSpendDTO {
+  id:              string;
+  entered_by:      string;
+  entered_by_name: string | null;
+  spend_date:      string; // YYYY-MM-DD
+  channel:         AdChannel;
+  campaign_name:   string | null;
+  amount:          number;
+  notes:           string | null;
+  created_at:      string;
+  updated_at:      string;
+}
+
 // ── Case Recommendation & Acceptance ───────────────────────────
 export interface CaseAcceptanceDTO {
   id:                       string;
@@ -172,7 +202,7 @@ export interface CaseAcceptanceDTO {
   case_acceptance_pct:      number | null;
   prepay_offered:           boolean | null;
   prepay_accepted:          boolean | null;
-  transition_completed:     boolean | null;
+  transition_notes:         string | null;
   notes:                    string | null;
   created_at:               string;
   updated_at:               string;

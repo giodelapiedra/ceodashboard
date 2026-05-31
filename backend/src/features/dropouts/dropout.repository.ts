@@ -400,4 +400,50 @@ export const dropoutRepository = {
   async delete(id: string): Promise<void> {
     await query(`DELETE FROM patient_dropouts WHERE id = $1`, [id]);
   },
+
+  /**
+   * Per-day counts of dropout entries for the CEO dashboard rows:
+   *   - cancelled = "Appointments Cancelled with No Rebooking"
+   *       status IN ('Cancelled - not rescheduled', 'No Future Bookings')
+   *   - rebooked  = "Appointments Cancelled & Rebooked"
+   *       status =  'Re-scheduled'
+   *
+   * Bucketed by `date_logged` (the date the entry was keyed in) — that is
+   * the filter Sam uses on the source spreadsheet, not the cancellation
+   * date. One dropout row = one count.
+   *
+   * Bypasses RequestScope on purpose — the CEO dashboard shows clinic-wide
+   * totals regardless of which user is viewing. Caller decides clinic.
+   * Single round-trip: one SELECT with CASE-bucketing fills both maps.
+   */
+  async dropoutCountsByDate(
+    clinicId: string,
+    dateFrom: string,
+    dateTo:   string
+  ): Promise<{
+    cancelled: Map<string, number>;
+    rebooked:  Map<string, number>;
+  }> {
+    const { rows } = await query<{ day: Date; bucket: string; n: string }>(
+      `SELECT
+         d.date_logged::date AS day,
+         CASE WHEN d.status = 'Re-scheduled' THEN 'rebooked' ELSE 'cancelled' END AS bucket,
+         COUNT(*)::bigint AS n
+         FROM patient_dropouts d
+        WHERE d.clinic_id    = $1
+          AND d.status       IN ('Cancelled - not rescheduled', 'No Future Bookings', 'Re-scheduled')
+          AND d.date_logged >= $2::date
+          AND d.date_logged <= $3::date
+        GROUP BY d.date_logged::date, bucket`,
+      [clinicId, dateFrom, dateTo]
+    );
+    const cancelled = new Map<string, number>();
+    const rebooked  = new Map<string, number>();
+    for (const r of rows) {
+      const day = isoDateOnly(r.day);
+      if (!day) continue;
+      (r.bucket === 'rebooked' ? rebooked : cancelled).set(day, Number(r.n));
+    }
+    return { cancelled, rebooked };
+  },
 };

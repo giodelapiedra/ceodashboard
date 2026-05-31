@@ -62,13 +62,15 @@ export const dropoutService = {
       throw Errors.forbidden('ADMIN cannot create dropout entries — use a clinician/front-desk account');
     }
 
-    // Resolve clinic for the entry. Single-clinic FRONT_DESK / CLINICIAN are
-    // pinned to their own clinic. FRONT_DESK_GLOBAL has no clinic on their
-    // account and must pick one per entry.
+    // Resolve clinic for the entry. FRONT_DESK_GLOBAL has no clinic pin and
+    // must pick one per entry. CLINICIAN also picks per entry — physios
+    // rotate between clinics, so the entry's clinic_id is independent of
+    // their primary users.clinic_id. FRONT_DESK (single-clinic receptionist)
+    // remains pinned by scope so they can't log entries for other clinics.
     let clinicId: string;
-    if (scope.role === 'FRONT_DESK_GLOBAL') {
+    if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'CLINICIAN') {
       if (!input.clinic_id) {
-        throw Errors.validation('clinic_id is required for global front-desk accounts');
+        throw Errors.validation('clinic_id is required — pick which clinic this entry is for');
       }
       clinicId = input.clinic_id;
     } else {
@@ -76,16 +78,15 @@ export const dropoutService = {
       clinicId = scope.clinic_id;
     }
 
-    // Validate the chosen clinician belongs to the resolved clinic AND is a CLINICIAN.
+    // Clinician must exist + active + actually be a CLINICIAN. Their primary
+    // users.clinic_id is intentionally NOT compared against clinicId here —
+    // any active clinician can be tagged on an entry for any clinic.
     const clinician = await userRepository.findById(input.clinician_id);
     if (!clinician || !clinician.is_active) {
       throw Errors.validation(`Clinician ${input.clinician_id} not found or inactive`);
     }
     if (clinician.role !== 'CLINICIAN') {
       throw Errors.validation(`User ${input.clinician_id} is not a clinician`);
-    }
-    if (clinician.clinic_id !== clinicId) {
-      throw Errors.validation(`Clinician ${input.clinician_id} is not in clinic ${clinicId}`);
     }
 
     // Receptionist accounts (FRONT_DESK / FRONT_DESK_GLOBAL) have a fixed
@@ -139,8 +140,8 @@ export const dropoutService = {
       if (!clinician || !clinician.is_active) {
         throw Errors.validation(`Clinician ${patch.clinician_id} not found or inactive`);
       }
-      if (clinician.role !== 'CLINICIAN' || clinician.clinic_id !== existing.clinic_id) {
-        throw Errors.validation('Clinician must be in the same clinic');
+      if (clinician.role !== 'CLINICIAN') {
+        throw Errors.validation(`User ${patch.clinician_id} is not a clinician`);
       }
     }
 

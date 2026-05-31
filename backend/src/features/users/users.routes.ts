@@ -18,10 +18,16 @@ const router = Router();
 router.use(authMiddleware);
 
 // ── Staff dropdown helper ─────────────────────────────────────────────────
-// GET /api/users/staff?role=CLINICIAN
+// GET /api/users/staff?role=CLINICIAN[&clinic_id=newport]
 //
-// CLINICIAN / FRONT_DESK get active staff in their own clinic only.
-// ADMIN can pass clinic_id; otherwise gets all clinics.
+// Clinician picker rule (confirmed with Sam 2026-05-11): physios rotate
+// between clinics, so when role=CLINICIAN is queried the dropdown shows
+// every active clinician regardless of caller scope — only honor clinic_id
+// if the caller explicitly asked to filter.
+//
+// Other roles (FRONT_DESK lookup, etc.) stay pinned by scope: single-clinic
+// callers see only their own clinic; ADMIN / FRONT_DESK_GLOBAL may pass
+// clinic_id or omit it for cross-clinic listing.
 router.get('/staff', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const scope = req.scope!;
@@ -29,21 +35,20 @@ router.get('/staff', async (req: AuthRequest, res: Response, next: NextFunction)
     if (!isRole(roleParam)) throw Errors.validation('role query param must be ADMIN/CLINICIAN/FRONT_DESK');
 
     const clinicParam = typeof req.query.clinic_id === 'string' ? req.query.clinic_id : undefined;
+    if (clinicParam !== undefined && !isClinicId(clinicParam)) {
+      throw Errors.validation(`Unknown clinic: ${clinicParam}`);
+    }
 
     let clinicId: string | null;
-    // Cross-clinic roles (ADMIN, FRONT_DESK_GLOBAL) may pass clinic_id and
-    // are otherwise unrestricted. Single-clinic roles are pinned by scope.
-    if (scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL') {
-      if (clinicParam !== undefined && !isClinicId(clinicParam)) {
-        throw Errors.validation(`Unknown clinic: ${clinicParam}`);
-      }
+    if (roleParam === 'CLINICIAN') {
+      clinicId = clinicParam ?? null;
+    } else if (scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL') {
       clinicId = clinicParam ?? null;
     } else {
       clinicId = scope.clinic_id;
     }
 
     if (clinicId === null) {
-      // Cross-clinic listing only meaningful for ADMIN — return all active staff with that role.
       const rows = await usersService.list({ role: roleParam as Role, active: true });
       return res.json(rows);
     }

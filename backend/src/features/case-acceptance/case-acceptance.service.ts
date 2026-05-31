@@ -86,12 +86,15 @@ export const caseAcceptanceService = {
       throw Errors.forbidden('ADMIN cannot create case acceptance entries — use a clinician/front-desk account');
     }
 
-    // Resolve the entry's clinic. FRONT_DESK_GLOBAL has no clinic on their
-    // account and must pick one per entry; everyone else is pinned by scope.
+    // Resolve the entry's clinic. FRONT_DESK_GLOBAL and CLINICIAN both pick
+    // per entry — physios rotate between clinics, so a CLINICIAN account
+    // can log entries against any clinic regardless of their primary
+    // users.clinic_id. FRONT_DESK (single-clinic receptionist) remains
+    // pinned by scope so they can't cross clinics.
     let clinicId: string;
-    if (scope.role === 'FRONT_DESK_GLOBAL') {
+    if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'CLINICIAN') {
       if (!input.clinic_id) {
-        throw Errors.validation('clinic_id is required for global front-desk accounts');
+        throw Errors.validation('clinic_id is required — pick which clinic this entry is for');
       }
       clinicId = input.clinic_id;
     } else {
@@ -105,9 +108,6 @@ export const caseAcceptanceService = {
     }
     if (clinician.role !== 'CLINICIAN') {
       throw Errors.validation(`User ${input.clinician_id} is not a clinician`);
-    }
-    if (clinician.clinic_id !== clinicId) {
-      throw Errors.validation(`Clinician ${input.clinician_id} is not in clinic ${clinicId}`);
     }
 
     // Receptionist accounts (FRONT_DESK / FRONT_DESK_GLOBAL) get their
@@ -136,7 +136,7 @@ export const caseAcceptanceService = {
       appointments_booked:     input.appointments_booked,
       prepay_offered:          input.prepay_offered ?? null,
       prepay_accepted:         input.prepay_accepted ?? null,
-      transition_completed:    input.transition_completed ?? null,
+      transition_notes:        input.transition_notes ?? null,
       notes:                   input.notes ?? null,
     });
   },
@@ -162,8 +162,8 @@ export const caseAcceptanceService = {
       if (!clinician || !clinician.is_active) {
         throw Errors.validation(`Clinician ${patch.clinician_id} not found or inactive`);
       }
-      if (clinician.role !== 'CLINICIAN' || clinician.clinic_id !== existing.clinic_id) {
-        throw Errors.validation('Clinician must be in the same clinic');
+      if (clinician.role !== 'CLINICIAN') {
+        throw Errors.validation(`User ${patch.clinician_id} is not a clinician`);
       }
     }
 

@@ -6,6 +6,9 @@ import { NookalDataCache } from './nookal-v3/data-cache';
 import { calculateMonthlyTotals } from './kpi.calculator';
 import { getWeekRanges, getMonthRange } from './week.calculator';
 import { snapshotRepository } from '../repositories/snapshot.repository';
+import { dropoutRepository } from '../features/dropouts/dropout.repository';
+import { caseAcceptanceRepository } from '../features/case-acceptance/case-acceptance.repository';
+import { adSpendRepository } from '../features/ad-spend/ad-spend.repository';
 import { env } from '../config/env';
 import { Clinic, CLINICS, MonthlyDashboard, MonthlyTotals, WeekMetrics, WeekRange } from '../types';
 
@@ -26,6 +29,164 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function sumDays(
+  perDay:   Map<string, number>,
+  dateFrom: string,
+  dateTo:   string
+): number {
+  let total = 0;
+  for (const [day, n] of perDay) {
+    if (day >= dateFrom && day <= dateTo) total += n;
+  }
+  return total;
+}
+
+type CaseDailyTotals = Map<string, { recs: number; booked: number; prepayAccepted: number }>;
+
+/**
+ * Weighted case-acceptance % over a date range:
+ *   sum(appointments_booked) / sum(case_recommendations) * 100
+ * Returns null when there are no recommendations in the range (matches
+ * `caseAcceptanceRepository.aggregate`'s null-when-empty semantics, so the
+ * dashboard cell renders "—" instead of "0%").
+ */
+function pctFromTotals(
+  perDay:   CaseDailyTotals,
+  dateFrom: string,
+  dateTo:   string
+): number | null {
+  let recs = 0, booked = 0;
+  for (const [day, t] of perDay) {
+    if (day >= dateFrom && day <= dateTo) {
+      recs   += t.recs;
+      booked += t.booked;
+    }
+  }
+  if (recs <= 0) return null;
+  return Math.round((booked / recs) * 10_000) / 100;
+}
+
+/** Count of prepay_accepted=TRUE rows across a date range. */
+function sumPrepayAccepted(
+  perDay:   CaseDailyTotals,
+  dateFrom: string,
+  dateTo:   string
+): number {
+  let n = 0;
+  for (const [day, t] of perDay) {
+    if (day >= dateFrom && day <= dateTo) n += t.prepayAccepted;
+  }
+  return n;
+}
+
+/**
+ * Cost Per Patient = ad spend / new patients. Null when there are no new
+ * patients in the range (renders "—" instead of a divide-by-zero / Infinity).
+ * Ad spend is global, so the SAME ad-spend figure is used at every clinic
+ * view; only the new-patient denominator differs.
+ */
+function costPerPatient(adSpend: number, newPatients: number): number | null {
+  if (newPatients <= 0) return null;
+  return Math.round((adSpend / newPatients) * 100) / 100;
+}
+
+/**
+ * Show Up Rate % = attended / (attended + cancelled + rebooked) × 100
+ * Cancellation % = (cancelled + rebooked) / (attended + cancelled + rebooked) × 100
+ *
+ * Both share the same denominator (total bookings = attended + cancelled)
+ * so they sum to 100%. Returns null when there are no bookings at all so
+ * the dashboard renders "—" instead of "0%".
+ *
+ * Mirrors the spreadsheet formulas:
+ *   Show Up:      =C21/(C21+SUM(C23:C24))
+ *   Cancellation: =SUM(C23:C24)/(C21+SUM(C23:C24))
+ */
+function showUpPct(
+  cancelled: number,
+  rebooked:  number,
+  attended:  number
+): number | null {
+  const totalBookings = attended + cancelled + rebooked;
+  if (totalBookings <= 0) return null;
+  return Math.round((attended / totalBookings) * 10_000) / 100;
+}
+
+function cancellationPct(
+  cancelled: number,
+  rebooked:  number,
+  attended:  number
+): number | null {
+  const cancellations = cancelled + rebooked;
+  const totalBookings = cancellations + attended;
+  if (totalBookings <= 0) return null;
+  return Math.round((cancellations / totalBookings) * 10_000) / 100;
+}
+
+/**
+ * Re-apply fresh DB-sourced metrics to a cached MonthlyDashboard payload.
+ * Cheap — two parallel SQL queries — and lets the cached snapshot stay
+ * valid for the slow-moving Nookal data while surfacing today's
+ * newly-logged dropout / case-acceptance entries.
+ *
+ * Writes through:
+ *   - appointmentsCancelled = "Cancelled - not rescheduled" + "No Future Bookings"
+ *   - appointmentsRebooked  = "Re-scheduled"
+ *   - caseAcceptance        = weighted SUM(booked) / SUM(recs) * 100
+ */
+async function overlayLiveMetrics(
+  payload:  MonthlyDashboard,
+  clinicId: string | null,
+  year:     number,
+  month:    number
+): Promise<MonthlyDashboard> {
+  const monthRange = getMonthRange(year, month);
+  const [dropoutCounts, caseTotals, adSpendDaily] = await Promise.all([
+    // dropoutCountsByDate currently requires a clinic — Overall builds its
+    // dropout numbers by summing per-clinic snapshots (already correct via
+    // SUM_WEEK_FIELDS), so this overlay only runs for per-clinic payloads.
+    clinicId
+      ? dropoutRepository.dropoutCountsByDate(clinicId, monthRange.dateFrom, monthRange.dateTo)
+      : Promise.resolve({ cancelled: new Map<string, number>(), rebooked: new Map<string, number>() }),
+    caseAcceptanceRepository.dailyTotals(clinicId, monthRange.dateFrom, monthRange.dateTo),
+    // Ad spend is global — re-overlay so newly-logged spend shows on a cache
+    // hit without a full Nookal refetch.
+    adSpendRepository.dailyTotals(monthRange.dateFrom, monthRange.dateTo),
+  ]);
+
+  const weeks = payload.weeks.map((w) => {
+    const cancelled = clinicId ? sumDays(dropoutCounts.cancelled, w.dateFrom, w.dateTo) : w.appointmentsCancelled;
+    const rebooked  = clinicId ? sumDays(dropoutCounts.rebooked,  w.dateFrom, w.dateTo) : w.appointmentsRebooked;
+    const adSpend = sumDays(adSpendDaily, w.dateFrom, w.dateTo);
+    return {
+      ...w,
+      appointmentsCancelled: cancelled,
+      appointmentsRebooked:  rebooked,
+      caseAcceptance:        pctFromTotals(caseTotals,     w.dateFrom, w.dateTo),
+      upfrontPlanAccepted:   sumPrepayAccepted(caseTotals, w.dateFrom, w.dateTo),
+      cancellationRate:      cancellationPct(cancelled, rebooked, w.appointmentsAttended),
+      showUpRate:            showUpPct(cancelled, rebooked, w.appointmentsAttended),
+      adSpend,
+      costPerPatient:        costPerPatient(adSpend, w.newPatients),
+    };
+  });
+  const mCancelled = clinicId ? sumDays(dropoutCounts.cancelled, monthRange.dateFrom, monthRange.dateTo) : payload.monthly.appointmentsCancelled;
+  const mRebooked  = clinicId ? sumDays(dropoutCounts.rebooked,  monthRange.dateFrom, monthRange.dateTo) : payload.monthly.appointmentsRebooked;
+  const mAdSpend = sumDays(adSpendDaily, monthRange.dateFrom, monthRange.dateTo);
+  const monthly: MonthlyTotals = {
+    ...payload.monthly,
+    appointmentsCancelled: mCancelled,
+    appointmentsRebooked:  mRebooked,
+    caseAcceptance:        pctFromTotals(caseTotals,     monthRange.dateFrom, monthRange.dateTo),
+    upfrontPlanAccepted:   sumPrepayAccepted(caseTotals, monthRange.dateFrom, monthRange.dateTo),
+    cancellationRate:      cancellationPct(mCancelled, mRebooked, payload.monthly.appointmentsAttended),
+    showUpRate:            showUpPct(mCancelled, mRebooked, payload.monthly.appointmentsAttended),
+    adSpend:               mAdSpend,
+    costPerPatient:        costPerPatient(mAdSpend, payload.monthly.newPatients),
+  };
+  return { ...payload, weeks, monthly };
+}
+
 export const dashboardService = {
   async getMonthly(
     clinic:       Clinic,
@@ -38,8 +199,12 @@ export const dashboardService = {
     if (!forceRefresh) {
       const cached = await snapshotRepository.find(clinic.id, year, month);
       if (cached && isFresh(cached.fetched_at)) {
+        // Dropout + case-acceptance entries are logged daily — re-overlay
+        // on every cache hit so the dashboard reflects newly-logged rows
+        // without forcing a full Nookal refetch.
+        const payload = await overlayLiveMetrics(cached.payload, clinic.id, year, month);
         return {
-          ...cached.payload,
+          ...payload,
           fetchedAt: new Date(cached.fetched_at).toISOString(),
           fromCache: true,
           duration:  Date.now() - startedAt,
@@ -86,6 +251,40 @@ export const dashboardService = {
 
     const monthly = sumMonthly(results.map((r) => r.monthly));
 
+    // Case-acceptance % is a ratio, not a sum — recompute cross-clinic
+    // weighted % directly from raw daily totals (no clinic filter) so the
+    // Overall view shows the true team-wide rate, not an avg of per-clinic %.
+    const monthRange = getMonthRange(year, month);
+    const [caseTotals, adSpendDaily] = await Promise.all([
+      caseAcceptanceRepository.dailyTotals(null, monthRange.dateFrom, monthRange.dateTo),
+      // Ad spend is global — NOT in SUM_WEEK_FIELDS, so sumWeeks zeroed it.
+      // Recompute once here so Overall shows the true business-wide figure
+      // instead of 3× (one per clinic).
+      adSpendRepository.dailyTotals(monthRange.dateFrom, monthRange.dateTo),
+    ]);
+    for (const w of weeks) {
+      w.caseAcceptance = pctFromTotals(caseTotals, w.dateFrom, w.dateTo);
+      // Ratios — derive from already-summed counts (cancelled, rebooked,
+      // attended are all in SUM_WEEK_FIELDS).
+      w.cancellationRate = cancellationPct(
+        w.appointmentsCancelled, w.appointmentsRebooked, w.appointmentsAttended
+      );
+      w.showUpRate = showUpPct(
+        w.appointmentsCancelled, w.appointmentsRebooked, w.appointmentsAttended
+      );
+      w.adSpend = sumDays(adSpendDaily, w.dateFrom, w.dateTo);
+      w.costPerPatient = costPerPatient(w.adSpend, w.newPatients);
+    }
+    monthly.caseAcceptance   = pctFromTotals(caseTotals, monthRange.dateFrom, monthRange.dateTo);
+    monthly.adSpend          = sumDays(adSpendDaily, monthRange.dateFrom, monthRange.dateTo);
+    monthly.costPerPatient   = costPerPatient(monthly.adSpend, monthly.newPatients);
+    monthly.cancellationRate = cancellationPct(
+      monthly.appointmentsCancelled, monthly.appointmentsRebooked, monthly.appointmentsAttended
+    );
+    monthly.showUpRate = showUpPct(
+      monthly.appointmentsCancelled, monthly.appointmentsRebooked, monthly.appointmentsAttended
+    );
+
     return {
       clinic:    'Overall',
       clinicId:  'overall',
@@ -123,6 +322,7 @@ function sumWeeks(parts: WeekMetrics[]): WeekMetrics {
     totalRevenue:     0, productSalesRevenue: 0, upfrontRevenue: 0,
     cashFromInsurance: 0, debtCollection: 0,
     newPatients: 0, patientReactivations: 0, newOptIns: 0,
+    adSpend: 0, costPerPatient: null,
     totalPatients: 0, appointmentsAttended: 0, appointmentsCancelled: 0,
     appointmentsRebooked: 0, noShows: 0,
     showUpRate: null, cancellationRate: null, caseAcceptance: null,
@@ -141,6 +341,7 @@ function sumMonthly(parts: MonthlyTotals[]): MonthlyTotals {
     totalRevenue: 0, productSalesRevenue: 0, upfrontRevenue: 0,
     cashFromInsurance: 0, debtCollection: 0,
     newPatients: 0, patientReactivations: 0, newOptIns: 0,
+    adSpend: 0, costPerPatient: null,
     totalPatients: 0, appointmentsAttended: 0, appointmentsCancelled: 0,
     appointmentsRebooked: 0, noShows: 0,
     showUpRate: null, cancellationRate: null, caseAcceptance: null,
@@ -203,8 +404,44 @@ async function fetchFromNookal(
     patientMetricsService.getReport(clinic, monthRange.dateFrom, monthRange.dateTo, cache),
   ] as const);
 
-  const [weekResults, [monthlyRevenue, monthlyInsurance, monthlyUpfront, monthlyPatients]] =
-    await Promise.all([weeksPromise, monthlyPromise]);
+  // DB-sourced rows (single query each, bucketed per week below):
+  //   - dropouts → "Cancelled with No Rebooking" + "Cancelled & Rebooked"
+  //   - case_acceptances → "Case Acceptance % For All Team" (weighted)
+  const dropoutCountsPromise   = dropoutRepository.dropoutCountsByDate(
+    clinic.id, monthRange.dateFrom, monthRange.dateTo
+  );
+  const caseTotalsPromise = caseAcceptanceRepository.dailyTotals(
+    clinic.id, monthRange.dateFrom, monthRange.dateTo
+  );
+  // Ad spend is global (no clinic) — the SAME daily totals feed every clinic
+  // view. Bucketed per week below, exactly like case acceptance.
+  const adSpendDailyPromise = adSpendRepository.dailyTotals(
+    monthRange.dateFrom, monthRange.dateTo
+  );
+
+  const [
+    weekResults,
+    [monthlyRevenue, monthlyInsurance, monthlyUpfront, monthlyPatients],
+    dropoutCounts,
+    caseTotals,
+    adSpendDaily,
+  ] = await Promise.all([weeksPromise, monthlyPromise, dropoutCountsPromise, caseTotalsPromise, adSpendDailyPromise]);
+
+  // Per-week totals (sum of per-day counts falling inside each week's range).
+  for (const wm of weekResults) {
+    wm.appointmentsCancelled = sumDays(dropoutCounts.cancelled, wm.dateFrom, wm.dateTo);
+    wm.appointmentsRebooked  = sumDays(dropoutCounts.rebooked,  wm.dateFrom, wm.dateTo);
+    wm.caseAcceptance        = pctFromTotals(caseTotals,        wm.dateFrom, wm.dateTo);
+    wm.upfrontPlanAccepted   = sumPrepayAccepted(caseTotals,    wm.dateFrom, wm.dateTo);
+    wm.cancellationRate      = cancellationPct(
+      wm.appointmentsCancelled, wm.appointmentsRebooked, wm.appointmentsAttended
+    );
+    wm.showUpRate            = showUpPct(
+      wm.appointmentsCancelled, wm.appointmentsRebooked, wm.appointmentsAttended
+    );
+    wm.adSpend               = sumDays(adSpendDaily, wm.dateFrom, wm.dateTo);
+    wm.costPerPatient        = costPerPatient(wm.adSpend, wm.newPatients);
+  }
 
   const monthly = calculateMonthlyTotals(weekResults);
   // "Monthly Actual" comes from the real month query (includes weekends),
@@ -215,6 +452,22 @@ async function fetchFromNookal(
   monthly.upfrontRevenue       = monthlyUpfront.total;
   monthly.newPatients          = monthlyPatients.newPatients;
   monthly.patientReactivations = monthlyPatients.patientReactivations;
+  // Ad spend (global) — full-month total, same "Monthly Actual" semantics.
+  monthly.adSpend              = sumDays(adSpendDaily, monthRange.dateFrom, monthRange.dateTo);
+  monthly.costPerPatient       = costPerPatient(monthly.adSpend, monthly.newPatients);
+  // DB-sourced rows: full-month totals (including weekend logging),
+  // matching the "Monthly Actual" semantics above. caseAcceptance is
+  // weighted over the entire month, not an average of weekly rates.
+  monthly.appointmentsCancelled = sumDays(dropoutCounts.cancelled, monthRange.dateFrom, monthRange.dateTo);
+  monthly.appointmentsRebooked  = sumDays(dropoutCounts.rebooked,  monthRange.dateFrom, monthRange.dateTo);
+  monthly.caseAcceptance        = pctFromTotals(caseTotals,        monthRange.dateFrom, monthRange.dateTo);
+  monthly.upfrontPlanAccepted   = sumPrepayAccepted(caseTotals,    monthRange.dateFrom, monthRange.dateTo);
+  monthly.cancellationRate      = cancellationPct(
+    monthly.appointmentsCancelled, monthly.appointmentsRebooked, monthly.appointmentsAttended
+  );
+  monthly.showUpRate            = showUpPct(
+    monthly.appointmentsCancelled, monthly.appointmentsRebooked, monthly.appointmentsAttended
+  );
   // totalPatients intentionally NOT overridden — per Sam: Monthly = sum of
   // weekly totals (same client seen multiple weeks counts once per week).
   // calculateMonthlyTotals already sums the week values for this field.
@@ -252,6 +505,8 @@ function reportToWeekMetrics(
     newPatients:          patients.newPatients,
     patientReactivations: patients.patientReactivations,
     newOptIns:            0,
+    adSpend:              0,
+    costPerPatient:       null,
 
     totalPatients:            patients.uniqueClients,
     appointmentsAttended:     patients.completedConsults,

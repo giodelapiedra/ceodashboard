@@ -5,6 +5,10 @@ export const ROLES = {
   // Multi-clinic receptionist: cross-clinic data entry for dropouts and
   // case acceptance. clinic_id is NULL and picked per entry.
   FRONT_DESK_GLOBAL: 'FRONT_DESK_GLOBAL',
+  // Marketing-spend encoder: the ONLY thing this account does is log ad spend
+  // line items. No dashboard, no dropouts, no case acceptance. clinic_id is
+  // NULL and picked per entry (ad budgets differ per clinic).
+  ADSPEND:           'ADSPEND',
 } as const;
 
 export type Role = typeof ROLES[keyof typeof ROLES];
@@ -55,6 +59,22 @@ export type FrontStaffName = typeof FRONT_STAFF_NAMES[number];
 
 export function isFrontStaffName(value: unknown): value is FrontStaffName {
   return typeof value === 'string' && (FRONT_STAFF_NAMES as readonly string[]).includes(value);
+}
+
+// Marketing channels an ad-spend line item can be tagged with. "Other"
+// covers anything not in the fixed list; the optional campaign_name field
+// carries the specifics. Mirrored on the frontend in types.ts.
+export const AD_CHANNELS = [
+  'Facebook',
+  'Google',
+  'Instagram',
+  'TikTok',
+  'Other',
+] as const;
+export type AdChannel = typeof AD_CHANNELS[number];
+
+export function isAdChannel(value: unknown): value is AdChannel {
+  return typeof value === 'string' && (AD_CHANNELS as readonly string[]).includes(value);
 }
 
 export const DROPOUT_REASONS = [

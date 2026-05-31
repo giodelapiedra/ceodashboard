@@ -241,7 +241,7 @@ export default function CaseAcceptanceAdminPage() {
                     <Th align="right">Acceptance</Th>
                     <Th align="center">Prepay off</Th>
                     <Th align="center">Prepay acc</Th>
-                    <Th align="center">Transition</Th>
+                    <Th>Transition notes</Th>
                     <Th>Notes</Th>
                   </tr>
                 </thead>
@@ -259,7 +259,7 @@ export default function CaseAcceptanceAdminPage() {
                       <Td align="right">{r.case_acceptance_pct === null ? <Dim>—</Dim> : `${r.case_acceptance_pct.toFixed(2)}%`}</Td>
                       <Td align="center"><YnPill v={r.prepay_offered} /></Td>
                       <Td align="center"><YnPill v={r.prepay_accepted} /></Td>
-                      <Td align="center"><TransitionPill v={r.transition_completed} /></Td>
+                      <Td><span style={{ color: TEXT_SOFT }}>{r.transition_notes || <Dim>—</Dim>}</span></Td>
                       <Td><span style={{ color: TEXT_SOFT }}>{r.notes || <Dim>—</Dim>}</span></Td>
                     </tr>
                   ))}
@@ -338,18 +338,6 @@ function YnPill({ v }: { v: boolean | null }) {
       padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
     }}>{yes ? 'Y' : 'N'}</span>
   )
-}
-function TransitionPill({ v }: { v: boolean | null }) {
-  if (v === null || v === undefined) return <Dim>—</Dim>
-  if (v === true) {
-    return (
-      <span style={{
-        background: '#22c55e', color: '#fff',
-        padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700,
-      }}>Done</span>
-    )
-  }
-  return <Dim>No</Dim>
 }
 
 const inputStyle: React.CSSProperties = {

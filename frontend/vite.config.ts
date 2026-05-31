@@ -6,7 +6,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://localhost:3001', changeOrigin: true },
+      '/api': {
+        target:             'http://localhost:3001',
+        changeOrigin:       true,
+        // Rewrite cookie domains so the browser stores them against localhost
+        // (without this, the httpOnly refresh-token cookie sent by the backend
+        // can't be read back and the /api/auth/refresh call silently fails,
+        // causing logout after the 8-hour access token expires).
+        cookieDomainRewrite: 'localhost',
+      },
     },
   },
 })

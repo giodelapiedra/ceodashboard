@@ -1,28 +1,33 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { DashboardData, WeekMetrics, MonthlyTotals } from '../../types'
-import { dashboardApi } from '../../api/dashboard.api'
+import { dashboardApi, AgeingDebtsData } from '../../api/dashboard.api'
 import FetchProgress from '../common/FetchProgress'
 import AppShell from '../shared/AppShell'
 
 // ── Format helpers ────────────────────────────────────────────
-// Empty / null / zero cells render as a plain "0" (rather than an em-dash)
-// so the dashboard reads like a tracker — every cell has a number.
+// Two render states for empty cells:
+//   - NO_DATA ("—")  → metric not connected to a data source yet (e.g. Ad
+//                       Spend, Ageing Debts). Distinct from a real zero
+//                       so the CEO doesn't read "0" as a tracked-but-empty
+//                       value.
+//   - ZERO_*         → metric is connected and the real value is zero.
 const ZERO_CURRENCY = '$0.00'
 const ZERO_INT      = '0'
 const ZERO_PCT      = '0%'
+const NO_DATA       = '—'
 const fmtCurrency = (v: number) =>
   `$${v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const fmtCurrencyCell = (v: number | null | undefined) =>
-  v == null || v === 0 ? ZERO_CURRENCY : fmtCurrency(v)
+  v == null ? NO_DATA : v === 0 ? ZERO_CURRENCY : fmtCurrency(v)
 const fmtIntCell = (v: number | null | undefined) =>
-  v == null || v === 0 ? ZERO_INT : v.toLocaleString('en-AU')
+  v == null ? NO_DATA : v === 0 ? ZERO_INT : v.toLocaleString('en-AU')
 const fmtPctCell = (v: number | null | undefined) =>
-  v == null ? ZERO_PCT : `${v.toFixed(1)}%`
+  v == null ? NO_DATA : `${v.toFixed(1)}%`
 
-/** Cells that ended up as one of the "no data" zero forms — greyed out so a
- *  real value (e.g. "$5,128.00") still pops visually. */
+/** Cells that ended up as one of the muted forms — greyed out so a real
+ *  value (e.g. "$5,128.00") still pops visually. */
 function isZeroCell(v: string): boolean {
-  return v === ZERO_INT || v === ZERO_PCT || v === ZERO_CURRENCY
+  return v === ZERO_INT || v === ZERO_PCT || v === ZERO_CURRENCY || v === NO_DATA
 }
 
 // ── Colours ───────────────────────────────────────────────────
@@ -121,7 +126,7 @@ function DataRow({
 }
 
 // ── Dashboard Table ───────────────────────────────────────────
-function DashboardTable({ data }: { data: DashboardData }) {
+function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardData; ageingDebts: AgeingDebtsData | null; ageingLoading: boolean }) {
   const w = data.weeks
   const m = data.monthly
 
@@ -190,10 +195,10 @@ function DashboardTable({ data }: { data: DashboardData }) {
     />
   )
 
-  const emptyRow = (label: string, def: string, metricType = 'Total', monthly = ZERO_INT) => (
+  const emptyRow = (label: string, def: string, metricType = 'Total', monthly = NO_DATA) => (
     <DataRow
       label={label} definition={def}
-      wk1={ZERO_INT} wk2={ZERO_INT} wk3={ZERO_INT} wk4={ZERO_INT} rem={ZERO_INT}
+      wk1={NO_DATA} wk2={NO_DATA} wk3={NO_DATA} wk4={NO_DATA} rem={NO_DATA}
       metricType={metricType} monthly={monthly}
       alt={nextAlt()}
     />
@@ -267,10 +272,24 @@ function DashboardTable({ data }: { data: DashboardData }) {
           {crow('Cash Collected from Insurance Patients',
             'Cash collected from insurance patients last 7 days',
             'cashFromInsurance', 'cashFromInsurance')}
-          {emptyRow('Projected Revenue from Insurance Patients',
-            'Projected revenue from insurance claims etc last 7 days', '')}
-          {emptyRow('Debt Collection',
-            'Total revenue sent to debt collection (all time)')}
+          {/* Ageing Debts — 10-year snapshot (2016→today) from Nookal.
+              Not a weekly metric — shows current outstanding total in Monthly Actual only. */}
+          <DataRow
+            label="Ageing Debts"
+            definition={
+              ageingLoading
+                ? 'Fetching outstanding balances from Nookal… this may take a minute.'
+                : `Total outstanding invoice balances (last 10 years). Current snapshot from Nookal.${ageingDebts ? ` Last updated: ${new Date(ageingDebts.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : ''}`
+            }
+            wk1={NO_DATA}
+            wk2={NO_DATA}
+            wk3={NO_DATA}
+            wk4={NO_DATA}
+            rem={NO_DATA}
+            metricType="Total"
+            monthly={ageingDebts ? fmtCurrency(ageingDebts.total) : ageingLoading ? 'Fetching…' : NO_DATA}
+            alt={nextAlt()}
+          />
 
           {/* ── MARKETING ── */}
           <SectionHeader label="Marketing" />
@@ -283,10 +302,12 @@ function DashboardTable({ data }: { data: DashboardData }) {
           {nrow('Patient Reactivations (New Episodes)',
             'Total number of patient reactivations in the last 7 days',
             'patientReactivations', 'patientReactivations')}
-          {emptyRow('Ad Spend',
-            'Total ad spend across all campaigns for last 7 days', '')}
-          {emptyRow('Cost Per Patient',
-            'Total ad spend / number of new patients')}
+          {crow('Ad Spend',
+            'Total ad spend across all campaigns (global, all clinics)',
+            'adSpend', 'adSpend')}
+          {crow('Cost Per Patient',
+            'Total ad spend / number of new patients',
+            'costPerPatient', 'costPerPatient')}
 
           {/* ── SALES ── */}
           <SectionHeader label="Sales (Service & Product Delivery)" />
@@ -340,9 +361,11 @@ export default function DashboardPage() {
   const [clinic, setClinic] = useState('newport')
   const [month, setMonth]   = useState(now.getMonth() + 1)
   const [year, setYear]     = useState(now.getFullYear())
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState<string | null>(null)
-  const [data, setData]       = useState<DashboardData | null>(null)
+  const [loading, setLoading]           = useState(false)
+  const [error, setError]               = useState<string | null>(null)
+  const [data, setData]                 = useState<DashboardData | null>(null)
+  const [ageingDebts, setAgeingDebts]   = useState<AgeingDebtsData | null>(null)
+  const [ageingLoading, setAgeingLoading] = useState(false)
 
   const fetchData = useCallback(async (forceRefresh = false) => {
     setLoading(true); setError(null)
@@ -350,13 +373,29 @@ export default function DashboardPage() {
       const result = await dashboardApi.getMonthly(clinic, month, year, { forceRefresh })
       setData(result)
     } catch (e: any) {
-      setError(e.response?.data?.error || 'Failed to fetch data')
+      setError(e.response?.data?.error?.message || 'Failed to fetch data')
     } finally {
       setLoading(false)
     }
   }, [clinic, month, year])
 
+  // Ageing debts is a snapshot (clinic-specific, not month-specific).
+  // Re-fetch whenever the selected clinic changes.
+  const fetchAgeingDebts = useCallback(async (forceRefresh = false) => {
+    setAgeingLoading(true)
+    try {
+      const result = await dashboardApi.getAgeingDebts(clinic, { forceRefresh })
+      setAgeingDebts(result)
+    } catch {
+      // Non-fatal — dashboard still works without this
+      setAgeingDebts(null)
+    } finally {
+      setAgeingLoading(false)
+    }
+  }, [clinic])
+
   useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { fetchAgeingDebts() }, [fetchAgeingDebts])
 
   const currentClinic = CLINIC_LIST.find(c => c.id === clinic)
   const years = [2025, 2026, 2027]
@@ -549,7 +588,7 @@ export default function DashboardPage() {
 
         <button
           className="fetch-btn"
-          onClick={() => fetchData(true)}
+          onClick={() => { fetchData(true); fetchAgeingDebts(true) }}
           disabled={loading}
           style={{
             background: loading ? '#9ca3af' : TEAL,
@@ -651,7 +690,7 @@ export default function DashboardPage() {
                 {MONTHS[data.month - 1]} {data.year}
               </div>
             </div>
-            <DashboardTable data={data} />
+            <DashboardTable data={data} ageingDebts={ageingDebts} ageingLoading={ageingLoading} />
 
             {/* Footer */}
             <div style={{

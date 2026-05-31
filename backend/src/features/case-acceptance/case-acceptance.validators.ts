@@ -28,7 +28,7 @@ const baseShape = {
   appointments_booked:      countField,
   prepay_offered:           triBool.optional(),
   prepay_accepted:          triBool.optional(),
-  transition_completed:     triBool.optional(),
+  transition_notes:         z.string().max(2000).nullable().optional(),
   notes:                    z.string().max(2000).nullable().optional(),
 };
 
@@ -49,7 +49,7 @@ export const updateCaseAcceptanceSchema = z.object({
   appointments_booked:      countField.optional(),
   prepay_offered:           triBool.optional(),
   prepay_accepted:          triBool.optional(),
-  transition_completed:     triBool.optional(),
+  transition_notes:         z.string().max(2000).nullable().optional(),
   notes:                    z.string().max(2000).nullable().optional(),
 })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided' })

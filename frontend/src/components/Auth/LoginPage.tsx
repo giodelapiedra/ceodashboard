@@ -14,7 +14,7 @@ export default function LoginPage() {
     try {
       await login(email, password)
     } catch (e: any) {
-      setError(e.response?.data?.error || 'Invalid email or password')
+      setError(e.response?.data?.error?.message || 'Invalid email or password')
       setLoading(false)
     }
   }

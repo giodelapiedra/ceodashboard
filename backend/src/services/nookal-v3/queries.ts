@@ -254,3 +254,55 @@ export interface V3Appointment {
 export interface AppointmentsByDateResult {
   appointments: V3Appointment[];
 }
+
+// ── Ageing Debts (outstanding invoice balances) ───────────────
+// Fetches invoices by creation-date range with the server-computed
+// Balance field (Total − payments − adjustments + refunds).
+// isThirdPartyInvoice: 1 = billed to insurer/third-party, 0 = patient direct.
+export const INVOICES_BY_DATE_BALANCE_QUERY = /* GraphQL */ `
+  query InvoicesByDateBalance(
+    $dateFrom:    String!,
+    $dateTo:      String!,
+    $locationIDs: [Int],
+    $void:        Int,
+    $page:        Int!,
+    $pageLength:  Int!
+  ) {
+    invoices(
+      dateFrom:    $dateFrom,
+      dateTo:      $dateTo,
+      locationIDs: $locationIDs,
+      void:        $void,
+      page:        $page,
+      pageLength:  $pageLength
+    ) {
+      invoiceID
+      invoiceNumber
+      clientID
+      locationID
+      Balance
+      Total
+      TotalPayments
+      dateCreated
+      void
+      isThirdPartyInvoice
+    }
+  }
+`;
+
+export interface V3InvoiceBalance {
+  invoiceID:            number;
+  invoiceNumber:        string | null;  // null/empty = draft (not yet finalised)
+  clientID:             number;         // 0 = orphaned invoice (client deleted); exclude from ageing
+  locationID:           number;
+  Balance:              number;   // server-computed outstanding amount
+  Total:                number;   // invoice face value (0 = incomplete DNA-fee entry)
+  TotalPayments:        number;   // sum of all payments applied to this invoice
+  dateCreated:          string;   // "Wed Jan 03 2024 10:00:00 GMT+1000 ..."
+  void:                 number;
+  isThirdPartyInvoice:  number;   // 1 = insurer/third-party, 0 = patient direct
+}
+
+export interface InvoicesByDateBalanceResult {
+  invoices: V3InvoiceBalance[];
+}

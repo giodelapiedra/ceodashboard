@@ -121,7 +121,7 @@ type ValidRow = {
   appointments_booked:     number;
   prepay_offered:          boolean | null;
   prepay_accepted:         boolean | null;
-  transition_completed:    boolean | null;
+  transition_notes:        string | null;
   notes:                   string | null;
 };
 
@@ -475,7 +475,7 @@ function validateRow(
       appointments_booked:     booked,
       prepay_offered:          r.prepay_offered,
       prepay_accepted:         r.prepay_accepted,
-      transition_completed:    r.transition,
+      transition_notes:        r.transition === true ? 'Done' : null,
       notes:                   r.notes ? r.notes.slice(0, 2000) : null,
     },
   };
@@ -656,13 +656,13 @@ export async function run(): Promise<void> {
            clinic_id, entered_by, front_staff_name, clinician_id,
            patient_name, date_logged, treatment_plan_provided,
            case_recommendations, appointments_booked,
-           prepay_offered, prepay_accepted, transition_completed, notes
+           prepay_offered, prepay_accepted, transition_notes, notes
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           v.clinic_id, v.entered_by, v.front_staff_name, v.clinician_id,
           v.patient_name, v.date_logged, v.treatment_plan_provided,
           v.case_recommendations, v.appointments_booked,
-          v.prepay_offered, v.prepay_accepted, v.transition_completed,
+          v.prepay_offered, v.prepay_accepted, v.transition_notes,
           v.notes,
         ]
       );

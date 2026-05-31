@@ -42,3 +42,7 @@ coverage/
 # Misc
 *.pid
 *.pid.lock
+
+backend/get-google-token.js
+backend/gads-token-output.txt
+backend/generate-gads-token.js

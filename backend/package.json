@@ -8,8 +8,11 @@
     "db:migrate": "ts-node-dev --transpile-only src/db/migrate.ts",
     "db:seed": "ts-node-dev --transpile-only src/db/seed.ts",
     "db:seed:front-desk": "ts-node-dev --transpile-only src/db/seed-front-desk.ts",
+    "db:seed:adspend": "ts-node-dev --transpile-only src/db/seed-adspend.ts",
     "db:import:dropouts": "ts-node-dev --transpile-only src/db/import-dropouts-2026.ts",
-    "db:import:case-acceptance": "ts-node-dev --transpile-only src/db/import-case-acceptance.ts"
+    "db:import:case-acceptance": "ts-node-dev --transpile-only src/db/import-case-acceptance.ts",
+    "db:import:dropouts:gsheets": "ts-node-dev --transpile-only src/db/import-dropouts-gsheets.ts",
+    "db:import:case-acceptance:gsheets": "ts-node-dev --transpile-only src/db/import-case-acceptance-gsheets.ts"
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -20,6 +23,8 @@
     "exceljs": "^4.4.0",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "google-ads-api": "^23.0.0",
+    "googleapis": "^173.0.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.3",

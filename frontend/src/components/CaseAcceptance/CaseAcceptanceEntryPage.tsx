@@ -76,14 +76,18 @@ interface FormState {
   appointments_booked:      string
   prepay_offered:           Tri
   prepay_accepted:          Tri
-  transition_completed:     Tri
+  transition_notes:         string
   notes:                    string
 }
 
 function emptyForm(currentUser: User): FormState {
+  // CLINICIAN + FRONT_DESK_GLOBAL pick clinic per entry (clinicians rotate
+  // between sites); FRONT_DESK is pinned to scope by the server.
+  const picksClinic =
+    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN'
   return {
     date_logged:             todayISO(),
-    clinic_id:               currentUser.role === 'FRONT_DESK_GLOBAL'
+    clinic_id:               picksClinic
                                ? ''
                                : (currentUser.clinic_id ?? '') as ClinicId | '',
     clinician_id:            currentUser.role === 'CLINICIAN' ? currentUser.id : '',
@@ -94,7 +98,7 @@ function emptyForm(currentUser: User): FormState {
     appointments_booked:     '0',
     prepay_offered:          '',
     prepay_accepted:         '',
-    transition_completed:    '',
+    transition_notes:        '',
     notes:                   '',
   }
 }
@@ -105,6 +109,10 @@ export default function CaseAcceptanceEntryPage() {
 
   const isReceptionist    = user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL'
   const isFrontDeskGlobal = user.role === 'FRONT_DESK_GLOBAL'
+  const isClinician       = user.role === 'CLINICIAN'
+  // CLINICIAN + FRONT_DESK_GLOBAL pick the entry's clinic per-entry. ADMIN
+  // can only edit; the clinic pre-loads from the row.
+  const picksClinic       = isClinician || isFrontDeskGlobal || user.role === 'ADMIN'
 
   const [rows,    setRows]    = useState<CaseAcceptanceDTO[]>([])
   const [total,   setTotal]   = useState(0)
@@ -178,18 +186,12 @@ export default function CaseAcceptanceEntryPage() {
     } finally { setExporting(false) }
   }
 
-  // Pinned-clinic users (FRONT_DESK / CLINICIAN) load clinicians from their
-  // own clinic; ADMIN and FRONT_DESK_GLOBAL both have null `user.clinic_id`,
-  // so they use `form.clinic_id` instead (set by the form on create, or
-  // pre-loaded from the row on edit).
-  const usesFormClinic = isFrontDeskGlobal || user.role === 'ADMIN'
-  const activeClinic: ClinicId | null = usesFormClinic
-    ? (form.clinic_id ? form.clinic_id : null)
-    : ((user.clinic_id as ClinicId | null) ?? null)
+  // Clinician dropdown shows every active clinician cross-clinic — physios
+  // rotate between sites. Fetched once on mount; clinic choice doesn't gate
+  // which names are visible.
   useEffect(() => {
-    if (!activeClinic) { setClinicians([]); return }
-    usersApi.staff('CLINICIAN', activeClinic).then(setClinicians).catch(() => {})
-  }, [activeClinic])
+    usersApi.staff('CLINICIAN').then(setClinicians).catch(() => {})
+  }, [])
 
   const startEdit = (row: CaseAcceptanceDTO) => {
     setEditingId(row.id)
@@ -206,7 +208,7 @@ export default function CaseAcceptanceEntryPage() {
       appointments_booked:     String(row.appointments_booked),
       prepay_offered:          boolToTri(row.prepay_offered),
       prepay_accepted:         boolToTri(row.prepay_accepted),
-      transition_completed:    boolToTri(row.transition_completed),
+      transition_notes:        row.transition_notes ?? '',
       notes:                   row.notes ?? '',
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -220,7 +222,7 @@ export default function CaseAcceptanceEntryPage() {
   const onSubmit = async () => {
     setError('')
 
-    if (usesFormClinic && !form.clinic_id) return setError('Clinic is required')
+    if (picksClinic && !form.clinic_id)        return setError('Clinic is required')
     if (!form.patient_name.trim())             return setError('Patient name is required')
     if (!form.clinician_id)                    return setError('Clinician is required')
 
@@ -247,7 +249,7 @@ export default function CaseAcceptanceEntryPage() {
         appointments_booked:     booked,
         prepay_offered:          triToBool(form.prepay_offered),
         prepay_accepted:         triToBool(form.prepay_accepted),
-        transition_completed:    triToBool(form.transition_completed),
+        transition_notes:        form.transition_notes.trim() || null,
         notes:                   form.notes.trim() || null,
       }
 
@@ -258,7 +260,9 @@ export default function CaseAcceptanceEntryPage() {
       } else {
         const payload: CreateCaseAcceptancePayload = {
           ...shared,
-          ...(isFrontDeskGlobal ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          // CLINICIAN + FRONT_DESK_GLOBAL pick clinic per entry. FRONT_DESK
+          // is pinned by scope server-side.
+          ...((isClinician || isFrontDeskGlobal) ? { clinic_id: form.clinic_id as ClinicId } : {}),
         }
         await caseAcceptanceApi.create(payload)
         toast.success(`Added case entry for ${patientName}`)
@@ -331,119 +335,135 @@ export default function CaseAcceptanceEntryPage() {
             }}>{error}</div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            <Field label="Date">
-              <input type="date" value={form.date_logged}
-                onChange={e => setForm({ ...form, date_logged: e.target.value })}
-                style={inputStyle} />
-            </Field>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-            {usesFormClinic && (
-              <Field label="Clinic">
-                <select value={form.clinic_id}
-                  onChange={e => setForm({
-                    ...form,
-                    clinic_id:    e.target.value as ClinicId | '',
-                    clinician_id: '',
-                  })}
-                  style={inputStyle}>
-                  <option value="">— Select clinic —</option>
-                  {CLINIC_OPTIONS.map(c => (
-                    <option key={c} value={c}>{CLINIC_LABEL[c]}</option>
-                  ))}
-                </select>
+            {/* ── Row 1: Date / Clinic / Clinician ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <Field label="Date">
+                <input type="date" value={form.date_logged}
+                  onChange={e => setForm({ ...form, date_logged: e.target.value })}
+                  style={inputStyle} />
               </Field>
-            )}
 
-            {user.role === 'CLINICIAN' ? (
-              <Field label="Clinician">
-                <input value={user.full_name || user.email} disabled style={{ ...inputStyle, background: '#f9fafb' }} />
+              {picksClinic ? (
+                <Field label="Clinic">
+                  <select value={form.clinic_id}
+                    onChange={e => setForm({ ...form, clinic_id: e.target.value as ClinicId | '' })}
+                    disabled={editingId !== null}
+                    style={{ ...inputStyle, ...(editingId ? { background: '#f9fafb' } : {}) }}>
+                    <option value="">— Select clinic —</option>
+                    {CLINIC_OPTIONS.map(c => (
+                      <option key={c} value={c}>{CLINIC_LABEL[c]}</option>
+                    ))}
+                  </select>
+                </Field>
+              ) : <div />}
+
+              {isClinician ? (
+                <Field label="Clinician">
+                  <input value={user.full_name || user.email} disabled style={{ ...inputStyle, background: '#f9fafb' }} />
+                </Field>
+              ) : (
+                <Field label="Clinician">
+                  <select value={form.clinician_id}
+                    onChange={e => setForm({ ...form, clinician_id: e.target.value })}
+                    style={inputStyle}>
+                    <option value="">— Select clinician —</option>
+                    {clinicians.map(c => (
+                      <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+            </div>
+
+            {/* ── Row 2: Front staff / Patient name ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              {isReceptionist ? (
+                <Field label="Front of staff name (your login)">
+                  <input
+                    value={user.full_name || user.email}
+                    disabled
+                    style={{ ...inputStyle, background: '#f9fafb' }}
+                  />
+                </Field>
+              ) : (
+                <Field label="Front of staff name">
+                  <select value={form.front_staff_name}
+                    onChange={e => setForm({ ...form, front_staff_name: e.target.value as FrontStaffName | '' })}
+                    style={inputStyle}>
+                    <option value="">— Select —</option>
+                    {FRONT_STAFF_NAMES.map(n => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
+              <Field label="Patient name">
+                <input value={form.patient_name}
+                  onChange={e => setForm({ ...form, patient_name: e.target.value })}
+                  placeholder="e.g. Andrew Hicks"
+                  style={inputStyle} />
               </Field>
-            ) : (
-              <Field label="Clinician">
-                <select value={form.clinician_id}
-                  onChange={e => setForm({ ...form, clinician_id: e.target.value })}
-                  style={inputStyle}
-                  disabled={usesFormClinic && !form.clinic_id}>
-                  <option value="">
-                    {usesFormClinic && !form.clinic_id
-                      ? '— Pick a clinic first —'
-                      : '— Select clinician —'}
-                  </option>
-                  {clinicians.map(c => (
-                    <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
-                  ))}
-                </select>
+
+              <div />
+            </div>
+
+            {/* ── Row 3: TP provided / Case recommendations / Appointments booked ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <Field label="Treatment plan provided">
+                <TriSelect value={form.treatment_plan_provided}
+                  onChange={v => setForm({ ...form, treatment_plan_provided: v })} />
               </Field>
-            )}
 
-            {isReceptionist ? (
-              <Field label="Front of staff name (your login)">
-                <input
-                  value={user.full_name || user.email}
-                  disabled
-                  style={{ ...inputStyle, background: '#f9fafb' }}
-                />
+              <Field label="Case recommendations">
+                <input type="number" min={0} max={1000} value={form.case_recommendations}
+                  onChange={e => setForm({ ...form, case_recommendations: e.target.value })}
+                  style={inputStyle} />
               </Field>
-            ) : (
-              <Field label="Front of staff name">
-                <select value={form.front_staff_name}
-                  onChange={e => setForm({ ...form, front_staff_name: e.target.value as FrontStaffName | '' })}
-                  style={inputStyle}>
-                  <option value="">— Select —</option>
-                  {FRONT_STAFF_NAMES.map(n => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+
+              <Field label="Appointments booked">
+                <input type="number" min={0} max={1000} value={form.appointments_booked}
+                  onChange={e => setForm({ ...form, appointments_booked: e.target.value })}
+                  style={inputStyle} />
               </Field>
-            )}
+            </div>
 
-            <Field label="Patient name">
-              <input value={form.patient_name}
-                onChange={e => setForm({ ...form, patient_name: e.target.value })}
-                placeholder="e.g. Andrew Hicks"
-                style={inputStyle} />
-            </Field>
+            {/* ── Row 4: Prepay offered / Prepay accepted ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <Field label="Prepay offered">
+                <TriSelect value={form.prepay_offered}
+                  onChange={v => setForm({ ...form, prepay_offered: v })} />
+              </Field>
 
-            <Field label="Treatment plan provided">
-              <TriSelect value={form.treatment_plan_provided}
-                onChange={v => setForm({ ...form, treatment_plan_provided: v })} />
-            </Field>
+              <Field label="Prepay accepted">
+                <TriSelect value={form.prepay_accepted}
+                  onChange={v => setForm({ ...form, prepay_accepted: v })} />
+              </Field>
 
-            <Field label="Case recommendations">
-              <input type="number" min={0} max={1000} value={form.case_recommendations}
-                onChange={e => setForm({ ...form, case_recommendations: e.target.value })}
-                style={inputStyle} />
-            </Field>
+              <div />
+            </div>
 
-            <Field label="Appointments booked">
-              <input type="number" min={0} max={1000} value={form.appointments_booked}
-                onChange={e => setForm({ ...form, appointments_booked: e.target.value })}
-                style={inputStyle} />
-            </Field>
+            {/* ── Row 5: Transition notes / Notes ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+              <Field label="Transition (TP explained / objections)">
+                <textarea value={form.transition_notes}
+                  onChange={e => setForm({ ...form, transition_notes: e.target.value })}
+                  rows={3}
+                  placeholder="What was explained, any objections…"
+                  style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} />
+              </Field>
 
-            <Field label="Prepay offered">
-              <TriSelect value={form.prepay_offered}
-                onChange={v => setForm({ ...form, prepay_offered: v })} />
-            </Field>
+              <Field label="Notes (if not booked all appts, why?)">
+                <textarea value={form.notes}
+                  onChange={e => setForm({ ...form, notes: e.target.value })}
+                  rows={3}
+                  placeholder="Anything worth noting…"
+                  style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} />
+              </Field>
+            </div>
 
-            <Field label="Prepay accepted">
-              <TriSelect value={form.prepay_accepted}
-                onChange={v => setForm({ ...form, prepay_accepted: v })} />
-            </Field>
-
-            <Field label="Transition (TP explained / objections)">
-              <TriSelect value={form.transition_completed}
-                onChange={v => setForm({ ...form, transition_completed: v })} />
-            </Field>
-
-            <Field label="Notes (if not booked all appts, why?)" full>
-              <textarea value={form.notes}
-                onChange={e => setForm({ ...form, notes: e.target.value })}
-                rows={2}
-                placeholder="Anything worth noting…"
-                style={{ ...inputStyle, resize: 'vertical', minHeight: 38 }} />
-            </Field>
           </div>
 
           <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -540,7 +560,7 @@ export default function CaseAcceptanceEntryPage() {
                     <Th align="right">Acceptance</Th>
                     <Th align="center">Prepay off</Th>
                     <Th align="center">Prepay acc</Th>
-                    <Th align="center">Transition</Th>
+                    <Th>Transition notes</Th>
                     <Th>Notes</Th>
                     <Th align="right">Actions</Th>
                   </tr>
@@ -559,7 +579,7 @@ export default function CaseAcceptanceEntryPage() {
                       <Td align="right">{r.case_acceptance_pct === null ? <Dim>—</Dim> : `${r.case_acceptance_pct.toFixed(2)}%`}</Td>
                       <Td align="center"><YnPill v={r.prepay_offered} /></Td>
                       <Td align="center"><YnPill v={r.prepay_accepted} /></Td>
-                      <Td align="center"><TransitionPill v={r.transition_completed} /></Td>
+                      <Td><span style={{ color: TEXT_SOFT }}>{r.transition_notes || <Dim>—</Dim>}</span></Td>
                       <Td><span style={{ color: TEXT_SOFT }}>{r.notes || <Dim>—</Dim>}</span></Td>
                       <Td align="right">
                         {isEditable(r) ? (
@@ -694,18 +714,6 @@ function YnPill({ v }: { v: boolean | null }) {
       padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
     }}>{yes ? 'Y' : 'N'}</span>
   )
-}
-function TransitionPill({ v }: { v: boolean | null }) {
-  if (v === null || v === undefined) return <Dim>—</Dim>
-  if (v === true) {
-    return (
-      <span style={{
-        background: '#22c55e', color: '#fff',
-        padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700,
-      }}>Done</span>
-    )
-  }
-  return <Dim>No</Dim>
 }
 
 const inputStyle: React.CSSProperties = {

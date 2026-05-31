@@ -63,7 +63,11 @@ class NookalV3Client {
   constructor() {
     this.http = axios.create({
       baseURL: env.NOOKAL_V3_BASE_URL,
-      timeout: 30_000,
+      // 90 s — the "overall" dashboard fetches all 3 clinics concurrently;
+      // each clinic's entries+invoice-map paginate up to ~10 pages in
+      // parallel, so a single Nookal request can take up to ~60 s under
+      // load. 30 s was too tight and caused spurious 500s.
+      timeout: 90_000,
     });
   }
 

@@ -6,6 +6,7 @@ import { revenueService } from '../services/revenue.service';
 import { cashInsuranceService } from '../services/cash-insurance.service';
 import { upfrontRevenueService } from '../services/upfront-revenue.service';
 import { patientMetricsService } from '../services/patient-metrics.service';
+import { ageingDebtsService } from '../services/ageing-debts.service';
 import { calculateWeekMetrics } from '../services/kpi.calculator';
 import { CLINICS } from '../types';
 
@@ -18,6 +19,36 @@ router.use(authMiddleware);
 // GET /api/dashboard/clinics
 router.get('/clinics', (_req, res: Response) => {
   res.json(CLINICS.map((c) => ({ id: c.id, name: c.name })));
+});
+
+// GET /api/dashboard/ageing-debts?clinic=newport|narrabeen|brookvale|overall
+// Returns a point-in-time snapshot of total outstanding invoice balances
+// over a rolling 10-year window (today − 10 years → today). Cached in-memory
+// for 4 hours (expensive paginated fetch).
+// ?refresh=1 busts the cache.
+router.get('/ageing-debts', async (req: AuthRequest, res: Response, next) => {
+  try {
+    const { clinic, refresh } = req.query;
+    const forceRefresh = refresh === '1' || refresh === 'true';
+
+    let locationIDs: number[] | undefined;
+    if (clinic && clinic !== 'overall') {
+      const clinicData = CLINICS.find((c) => c.id === clinic);
+      if (!clinicData) {
+        return res.status(400).json({ error: `Unknown clinic: ${clinic}` });
+      }
+      locationIDs = [clinicData.v3LocationId];
+    }
+    // clinic='overall' or omitted → all locations (no locationIDs filter)
+
+    const result = await ageingDebtsService.get(locationIDs, forceRefresh);
+    console.log(
+      `[dashboard] ageing-debts ${clinic ?? 'overall'} — ${result.fromCache ? 'CACHE HIT' : 'FRESH'} total=$${result.total}`
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/dashboard/monthly?clinic=newport&month=4&year=2026[&refresh=1]

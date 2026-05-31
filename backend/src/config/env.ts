@@ -6,7 +6,7 @@ dotenv.config();
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT:     z.coerce.number().default(3001),
-  FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().min(1).default('http://localhost:5173'),
 
   DATABASE_URL:   z.string().min(1, 'DATABASE_URL is required'),
   DB_POOL_MAX:    z.coerce.number().default(10),
@@ -28,6 +28,20 @@ const EnvSchema = z.object({
   NOOKAL_V3_LOCATION_NEWPORT:   z.coerce.number().int().default(1),
   NOOKAL_V3_LOCATION_NARRABEEN: z.coerce.number().int().default(2),
   NOOKAL_V3_LOCATION_BROOKVALE: z.coerce.number().int().default(6),
+
+  // ── Google Ads API (optional — sync disabled when absent) ────
+  GOOGLE_ADS_DEVELOPER_TOKEN: z.string().min(1).optional(),
+  GOOGLE_ADS_CLIENT_ID:       z.string().min(1).optional(),
+  GOOGLE_ADS_CLIENT_SECRET:   z.string().min(1).optional(),
+  GOOGLE_ADS_REFRESH_TOKEN:   z.string().min(1).optional(),
+  GOOGLE_ADS_CUSTOMER_ID:     z.string().min(1).optional(),
+  GOOGLE_ADS_MANAGER_ID:      z.string().min(1).optional(),
+
+  // ── Google Sheets API (import scripts only — optional in production) ─────
+  GOOGLE_SHEETS_REFRESH_TOKEN:   z.string().min(1).optional(),
+  GOOGLE_SHEETS_CLIENT_ID:       z.string().min(1).optional(),
+  GOOGLE_SHEETS_CLIENT_SECRET:   z.string().min(1).optional(),
+  GOOGLE_SHEETS_KEY_FILE:        z.string().min(1).optional(),
 
   CEO_EMAIL:    z.string().email(),
   CEO_PASSWORD: z.string().min(8),

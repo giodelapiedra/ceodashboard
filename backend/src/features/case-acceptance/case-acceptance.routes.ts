@@ -162,7 +162,7 @@ router.get('/export', async (req: AuthRequest, res: Response, next: NextFunction
       };
       values[C_PPO    - 1] = tickText(r.prepay_offered);
       values[C_PPA    - 1] = tickText(r.prepay_accepted);
-      values[C_TR     - 1] = tickText(r.transition_completed);
+      values[C_TR     - 1] = r.transition_notes ?? '';
       values[C_NOTES  - 1] = r.notes ?? '';
 
       const row = ws.addRow(values);
@@ -186,9 +186,8 @@ router.get('/export', async (req: AuthRequest, res: Response, next: NextFunction
 
       // Per-value pill fills (override the category default).
       paintYN(row.getCell(C_TP),  r.treatment_plan_provided, C);
-      paintTick(row.getCell(C_PPO), r.prepay_offered,        C);
-      paintTick(row.getCell(C_PPA), r.prepay_accepted,       C);
-      paintTick(row.getCell(C_TR),  r.transition_completed,  C);
+      paintTick(row.getCell(C_PPO), r.prepay_offered,  C);
+      paintTick(row.getCell(C_PPA), r.prepay_accepted, C);
 
       // Acceptance % cell — neutral background but with the percentage format.
       const pctCell = row.getCell(C_PCT);
@@ -210,7 +209,7 @@ router.get('/export', async (req: AuthRequest, res: Response, next: NextFunction
         showErrorMessage: true, errorStyle: 'warning',
         errorTitle: 'Invalid value', error: 'Pick Y or N.',
       };
-      for (const col of [C_PPO, C_PPA, C_TR]) {
+      for (const col of [C_PPO, C_PPA]) {
         ws.getCell(r, col).dataValidation = {
           type: 'list', allowBlank: true, formulae: [tick],
           showErrorMessage: true, errorStyle: 'warning',

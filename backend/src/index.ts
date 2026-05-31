@@ -13,14 +13,16 @@ import dashboardRoutes      from './routes/dashboard.routes';
 import usersRoutes          from './features/users/users.routes';
 import dropoutsRoutes       from './features/dropouts/dropouts.routes';
 import caseAcceptanceRoutes from './features/case-acceptance/case-acceptance.routes';
+import adSpendRoutes         from './features/ad-spend/ad-spend.routes';
 import auditLogRoutes        from './features/audit-log/audit-log.routes';
 import { errorMiddleware } from './middleware/error.middleware';
 
 const app = express();
 
 app.use(helmet());
+const allowedOrigins = env.FRONTEND_URL.split(',').map(s => s.trim()).filter(Boolean);
 app.use(cors({
-  origin:      env.FRONTEND_URL,
+  origin:      allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
   credentials: true,
 }));
 app.use(cookieParser());
@@ -31,6 +33,7 @@ app.use('/api/dashboard',       dashboardRoutes);
 app.use('/api/users',           usersRoutes);
 app.use('/api/dropouts',        dropoutsRoutes);
 app.use('/api/case-acceptance', caseAcceptanceRoutes);
+app.use('/api/ad-spend',        adSpendRoutes);
 app.use('/api/audit-log',       auditLogRoutes);
 
 app.get('/api/health', (_req, res) => {

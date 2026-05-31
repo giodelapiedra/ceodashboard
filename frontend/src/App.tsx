@@ -11,6 +11,7 @@ import CaseAcceptanceAdminPage from './components/Admin/CaseAcceptanceAdminPage'
 import AuditLogPage from './components/Admin/AuditLogPage'
 import DropoutEntryPage from './components/Dropouts/DropoutEntryPage'
 import CaseAcceptanceEntryPage from './components/CaseAcceptance/CaseAcceptanceEntryPage'
+import AdSpendEntryPage from './components/AdSpend/AdSpendEntryPage'
 import ToastContainer from './components/shared/ToastContainer'
 import ConfirmDialog from './components/shared/ConfirmDialog'
 import PromptDialog from './components/shared/PromptDialog'
@@ -26,9 +27,12 @@ export default function App() {
   useEffect(() => {
     if (!user) return
     if (user.role === 'ADMIN') {
-      if (!['dashboard', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-activity-log'].includes(page)) {
+      if (!['dashboard', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-activity-log', 'dropout-entry', 'case-acceptance-entry', 'ad-spend-entry'].includes(page)) {
         navigate('dashboard')
       }
+    } else if (user.role === 'ADSPEND') {
+      // The ad-spend encoder only ever sees the ad-spend entry page.
+      if (page !== 'ad-spend-entry') navigate('ad-spend-entry')
     } else {
       if (!['dropout-entry', 'case-acceptance-entry'].includes(page)) {
         navigate('dropout-entry')
@@ -75,7 +79,12 @@ export default function App() {
     // blocked from creating in the backend).
     else if (page === 'case-acceptance-entry')    page_node = <CaseAcceptanceEntryPage />
     else if (page === 'dropout-entry')            page_node = <DropoutEntryPage />
+    else if (page === 'ad-spend-entry')           page_node = <AdSpendEntryPage />
     else                                          page_node = <DashboardPage />
+  } else if (user.role === 'ADSPEND') {
+    // Hard lock: the ad-spend encoder can ONLY ever render this one page,
+    // regardless of nav state. No dashboard, dropouts, or case acceptance.
+    page_node = <AdSpendEntryPage />
   } else {
     // CLINICIAN, FRONT_DESK, FRONT_DESK_GLOBAL — same two pages.
     if (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
