@@ -132,15 +132,17 @@ export default function CaseAcceptanceEntryPage() {
 
   const [summary, setSummary] = useState<CaseAcceptanceSummary | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [clinicianFilter, setClinicianFilter] = useState('')
 
-  useEffect(() => { setOffset(0) }, [search, limit, dateRange])
+  useEffect(() => { setOffset(0) }, [search, limit, dateRange, clinicianFilter])
 
   // Filter object reused across list / summary / export — keeps the table,
   // cards, and downloaded file always agreeing.
   const filter = useMemo(() => ({
-    date_from: dateRange.from,
-    date_to:   dateRange.to,
-  }), [dateRange])
+    date_from:    dateRange.from,
+    date_to:      dateRange.to,
+    clinician_id: clinicianFilter || undefined,
+  }), [dateRange, clinicianFilter])
 
   const [clinicians, setClinicians] = useState<User[]>([])
 
@@ -499,6 +501,16 @@ export default function CaseAcceptanceEntryPage() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <DateRangePicker value={dateRange} onChange={setDateRange} />
+              <select
+                value={clinicianFilter}
+                onChange={e => setClinicianFilter(e.target.value)}
+                style={{ ...inputStyle, width: 'auto', minWidth: 160, fontSize: 12, padding: '7px 10px' }}
+              >
+                <option value="">All Clinicians</option>
+                {clinicians.map(c => (
+                  <option key={c.id} value={c.id}>{c.full_name}</option>
+                ))}
+              </select>
               <div style={{ position: 'relative' }}>
                 <input
                   type="text"

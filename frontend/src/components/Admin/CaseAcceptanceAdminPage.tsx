@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { caseAcceptanceApi, CaseAcceptanceSummary } from '../../api/caseAcceptance.api'
-import { CaseAcceptanceDTO, ClinicId, CLINIC_LABEL } from '../../types'
+import { CaseAcceptanceDTO, ClinicId, CLINIC_LABEL, User } from '../../types'
+import { usersApi } from '../../api/users.api'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
@@ -47,15 +48,22 @@ export default function CaseAcceptanceAdminPage() {
   const [limit,  setLimit]  = useState(50)
   const [offset, setOffset] = useState(0)
   const [exporting, setExporting] = useState(false)
+  const [clinicians, setClinicians] = useState<User[]>([])
+  const [clinicianFilter, setClinicianFilter] = useState('')
 
-  useEffect(() => { setOffset(0) }, [tab, dateFrom, dateTo, tpFilter, search, limit])
+  useEffect(() => {
+    usersApi.staff('CLINICIAN').then(setClinicians).catch(() => {})
+  }, [])
+
+  useEffect(() => { setOffset(0) }, [tab, dateFrom, dateTo, tpFilter, search, limit, clinicianFilter])
 
   const filterParams = {
-    clinic_id:   tab === 'overall' ? undefined : tab,
-    date_from:   dateFrom || undefined,
-    date_to:     dateTo   || undefined,
-    tp_provided: tpFilter === '' ? undefined : tpFilter === 'Y',
-    search:      search   || undefined,
+    clinic_id:    tab === 'overall' ? undefined : tab,
+    date_from:    dateFrom || undefined,
+    date_to:      dateTo   || undefined,
+    tp_provided:  tpFilter === '' ? undefined : tpFilter === 'Y',
+    search:       search   || undefined,
+    clinician_id: clinicianFilter || undefined,
   }
 
   const load = useCallback(async () => {
@@ -68,7 +76,7 @@ export default function CaseAcceptanceAdminPage() {
       setError(e.response?.data?.error?.message || 'Failed to load entries')
     } finally { setLoading(false) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, tpFilter, search, limit, offset])
+  }, [tab, dateFrom, dateTo, tpFilter, search, limit, offset, clinicianFilter])
 
   useEffect(() => { load() }, [load])
 
@@ -95,7 +103,7 @@ export default function CaseAcceptanceAdminPage() {
       .catch(() => {})
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, tpFilter, search])
+  }, [tab, dateFrom, dateTo, tpFilter, search, clinicianFilter])
 
   return (
     <AppShell title="Case Recommendation & Acceptance">
@@ -155,6 +163,14 @@ export default function CaseAcceptanceAdminPage() {
               onChange={(r) => { setDateFrom(r.from); setDateTo(r.to) }}
               maxRangeDays={366}
             />
+          </Field>
+          <Field label="Clinician">
+            <select value={clinicianFilter} onChange={e => setClinicianFilter(e.target.value)} style={inputStyle}>
+              <option value="">All Clinicians</option>
+              {clinicians.map(c => (
+                <option key={c.id} value={c.id}>{c.full_name}</option>
+              ))}
+            </select>
           </Field>
           <Field label="TP Provided">
             <select value={tpFilter} onChange={e => setTpFilter(e.target.value as TpFilter)} style={inputStyle}>
