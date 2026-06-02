@@ -22,20 +22,19 @@ export async function fetchFacebookAdsSpend(
   let isFirst = true;
 
   while (url) {
-    const params: Record<string, string> = isFirst
-      ? {
-          fields:         'spend,campaign_name,date_start',
-          time_range:     JSON.stringify({ since: dateFrom, until: dateTo }),
-          time_increment: '1',
-          level:          'campaign',
-          access_token:   env.FACEBOOK_ADS_ACCESS_TOKEN,
-          limit:          '500',
-        }
-      : { access_token: env.FACEBOOK_ADS_ACCESS_TOKEN };
+    const params: Record<string, string> = {
+      fields:         'spend,campaign_name,date_start',
+      time_range:     JSON.stringify({ since: dateFrom, until: dateTo }),
+      time_increment: '1',
+      level:          'campaign',
+      access_token:   env.FACEBOOK_ADS_ACCESS_TOKEN!,
+      limit:          '500',
+    };
 
-    const { data } = await axios.get(url, { params: isFirst ? params : undefined });
+    const resp = await axios.get<any>(isFirst ? url : url, isFirst ? { params } : {});
+    const page: any = resp.data;
 
-    for (const row of (data.data ?? [])) {
+    for (const row of (page.data ?? [])) {
       const amount = parseFloat(row.spend ?? '0');
       if (amount > 0) {
         results.push({
@@ -46,11 +45,7 @@ export async function fetchFacebookAdsSpend(
       }
     }
 
-    url = data.paging?.next ?? null;
-    if (!isFirst && url) {
-      // next page URL already has access_token baked in
-      url = data.paging.next;
-    }
+    url = page.paging?.next ?? null;
     isFirst = false;
   }
 

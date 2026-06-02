@@ -497,11 +497,12 @@ export default function AdSpendEntryPage() {
 
   const isEditable = (row: AdSpendDTO) => isAdmin || row.entered_by === user.id
 
-  // ── Google Ads sync (ADMIN only) ──
-  const [syncing,    setSyncing]    = useState(false)
-  const [syncResult, setSyncResult] = useState<string | null>(null)
-  const [syncFrom,   setSyncFrom]   = useState(() => `${new Date().getFullYear()}-01-01`)
-  const [syncTo,     setSyncTo]     = useState(todayISO)
+  // ── Ads sync (ADMIN only) ──
+  const [syncing,      setSyncing]      = useState(false)
+  const [syncingFb,    setSyncingFb]    = useState(false)
+  const [syncResult,   setSyncResult]   = useState<string | null>(null)
+  const [syncFrom,     setSyncFrom]     = useState(() => `${new Date().getFullYear()}-01-01`)
+  const [syncTo,       setSyncTo]       = useState(todayISO)
 
   const onSyncGoogle = async () => {
     setSyncing(true); setSyncResult(null)
@@ -519,6 +520,22 @@ export default function AdSpendEntryPage() {
     } finally { setSyncing(false) }
   }
 
+  const onSyncFacebook = async () => {
+    setSyncingFb(true); setSyncResult(null)
+    try {
+      const res = await adSpendApi.syncFacebook(syncFrom, syncTo)
+      const msg = res.inserted > 0
+        ? `Synced ${res.inserted} Facebook Ads entries (${syncFrom} → ${syncTo})`
+        : `No Facebook Ads spend found for ${syncFrom} → ${syncTo}`
+      setSyncResult(msg)
+      toast.success(msg)
+      await loadEntries()
+    } catch (e: any) {
+      const msg = e.response?.data?.error?.message || 'Facebook Ads sync failed'
+      setSyncResult(msg); toast.error(msg)
+    } finally { setSyncingFb(false) }
+  }
+
   const tabs: { id: Tab; label: string; show: boolean }[] = [
     { id: 'enter',   label: 'Enter Week',    show: !isAdmin },
     { id: 'weekly',  label: 'Weekly Report', show: true     },
@@ -529,14 +546,20 @@ export default function AdSpendEntryPage() {
     <AppShell title="Ad Spend">
       <div style={{ padding:'20px 28px' }}>
 
-        {/* Google Ads sync — ADMIN only */}
+        {/* Ads sync — ADMIN only */}
         {isAdmin && (
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, padding:'12px 16px', background:'#f0faf7', border:`1px solid #a7f3d0`, borderRadius:10, flexWrap:'wrap' }}>
             <button
               onClick={onSyncGoogle}
-              disabled={syncing}
+              disabled={syncing || syncingFb}
               style={{ background: syncing ? '#9ca3af' : TEAL, color:'#fff', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: syncing ? 'not-allowed' : 'pointer', fontFamily:"'DM Sans',sans-serif", whiteSpace:'nowrap' }}>
               {syncing ? 'Syncing...' : 'Sync Google Ads'}
+            </button>
+            <button
+              onClick={onSyncFacebook}
+              disabled={syncing || syncingFb}
+              style={{ background: syncingFb ? '#9ca3af' : '#1877f2', color:'#fff', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: syncingFb ? 'not-allowed' : 'pointer', fontFamily:"'DM Sans',sans-serif", whiteSpace:'nowrap' }}>
+              {syncingFb ? 'Syncing...' : 'Sync Facebook Ads'}
             </button>
             <div style={{ display:'flex', alignItems:'center', gap:6 }}>
               <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>From</span>
