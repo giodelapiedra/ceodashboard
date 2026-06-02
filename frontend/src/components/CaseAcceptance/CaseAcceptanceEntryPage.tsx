@@ -611,55 +611,76 @@ export default function CaseAcceptanceEntryPage() {
   )
 }
 
+function pct(n: number, d: number): string {
+  if (d <= 0) return '0'
+  return ((n / d) * 100).toFixed(1)
+}
+
 function SummaryCards({ summary }: { summary: CaseAcceptanceSummary | null }) {
-  // While the first load is in flight, render placeholder shapes so the
-  // layout doesn't jump when numbers arrive.
   const loaded = summary !== null
-  const cards: { label: string; value: string; sub?: string }[] = loaded ? [
+  const cards: { label: string; value: string; sub?: string; highlight?: boolean }[] = loaded ? [
     {
-      label: 'Entries',
-      value: summary!.total.toLocaleString(),
-      sub:   `${summary!.tpProvided} TP yes · ${summary!.tpNotProvided} TP no`,
+      label:     'Entries',
+      value:     summary!.total.toLocaleString(),
+      highlight: true,
     },
     {
-      label: 'Case acceptance',
-      value: summary!.caseAcceptancePct === null ? '—' : `${summary!.caseAcceptancePct.toFixed(2)}%`,
+      label: 'Recs',
+      value: summary!.totalRecommendations.toLocaleString(),
+      sub:   summary!.totalRecommendations > 0
+               ? `${pct(summary!.totalBooked, summary!.totalRecommendations)}% booked`
+               : '',
+    },
+    {
+      label: 'Booked',
+      value: summary!.totalBooked.toLocaleString(),
+      sub:   summary!.caseAcceptancePct !== null
+               ? `${summary!.caseAcceptancePct.toFixed(1)}% acceptance`
+               : '',
+    },
+    {
+      label: 'Acceptance',
+      value: summary!.caseAcceptancePct === null ? '—' : `${summary!.caseAcceptancePct.toFixed(1)}%`,
       sub:   `${summary!.totalBooked.toLocaleString()} / ${summary!.totalRecommendations.toLocaleString()}`,
     },
     {
       label: 'Prepay offered',
       value: summary!.prepayOffered.toLocaleString(),
       sub:   summary!.total > 0
-              ? `${((summary!.prepayOffered / summary!.total) * 100).toFixed(0)}% of entries`
-              : '—',
+               ? `${pct(summary!.prepayOffered, summary!.total)}% of entries`
+               : '—',
     },
     {
       label: 'Prepay accepted',
       value: summary!.prepayAccepted.toLocaleString(),
       sub:   summary!.prepayOffered > 0
-              ? `${((summary!.prepayAccepted / summary!.prepayOffered) * 100).toFixed(0)}% of offered`
-              : 'No offers yet',
+               ? `${pct(summary!.prepayAccepted, summary!.prepayOffered)}% of offers`
+               : 'No offers yet',
     },
   ] : [
-    { label: 'Entries',         value: '—' },
-    { label: 'Case acceptance', value: '—' },
-    { label: 'Prepay offered',  value: '—' },
-    { label: 'Prepay accepted', value: '—' },
+    { label: 'Entries',          value: '—', highlight: true },
+    { label: 'Recs',             value: '—' },
+    { label: 'Booked',           value: '—' },
+    { label: 'Acceptance',       value: '—' },
+    { label: 'Prepay offered',   value: '—' },
+    { label: 'Prepay accepted',  value: '—' },
   ]
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12,
+      display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12,
       marginBottom: 16,
     }}>
       {cards.map((c) => (
         <div key={c.label} style={{
-          background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
+          background: c.highlight ? '#f0faf7' : '#fff',
+          border: `1px solid ${c.highlight ? '#cdebde' : BORDER}`,
+          borderRadius: 10,
           padding: '14px 18px',
         }}>
           <div style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             {c.label}
           </div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: TEXT, marginTop: 4, fontFamily: "'DM Sans', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 700, color: c.highlight ? TEAL : TEXT, marginTop: 4, fontFamily: "'DM Sans', sans-serif" }}>
             {c.value}
           </div>
           {c.sub && (
