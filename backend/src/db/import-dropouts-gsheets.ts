@@ -38,7 +38,10 @@ interface ClinicConfig {
 const CLINIC_CONFIGS: Record<string, ClinicConfig> = {
   newport: {
     sheetId:          '1Wl91IdBkrGkhzJfu9keSxjlAOZFyazS_Z5R5Z_y85u8',
-    sheetTab:         'A:I',   // first tab — no sheet-name prefix needed
+    // Use the NAMED tab, not the first tab — the sheet was reordered (a "New
+    // Patient Lead Conversion Tracker" tab is now first), so 'A:I' would read
+    // the wrong tab. The dropout data lives in "Daily Patient Dropout Tracking".
+    sheetTab:         "'Daily Patient Dropout Tracking'!A:I",
     clinicianAliases: {},
     clinicianSkips:   ['Other - Physio'],
     reasonAliases:    { 'Physio Discharged': 'Discharged' },
