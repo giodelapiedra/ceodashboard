@@ -269,16 +269,24 @@ export async function run(): Promise<void> {
   }
 
   const parsed: ParsedRow[] = [];
+  const dateCorrections: { row: number; from: string; to: string; patient: string | null }[] = [];
   for (let i = 0; i < allRows.length; i++) {
     const r    = allRows[i];
     const col0 = (r[0] ?? '').trim().toLowerCase();
     // Skip title row, header rows, repeated header rows
     if (col0 === '' || col0 === 'date' || col0.startsWith('daily case')) continue;
 
-    const date_logged    = parseDateLogged(cell(r, 0));
     const front_staff    = cell(r, 1);
     const clinician      = cell(r, 2);
     const patient        = cell(r, 3);
+    let date_logged      = parseDateLogged(cell(r, 0));
+    // This tracker is 2026-only, so any other year (e.g. "0206", 2027, 2028) is
+    // a data-entry typo — coerce the year to 2026, keeping month/day, and report.
+    if (date_logged && !date_logged.startsWith(`${SOURCE_YEAR}-`)) {
+      const fixed = `${SOURCE_YEAR}-${date_logged.slice(5)}`;
+      dateCorrections.push({ row: i + 1, from: date_logged, to: fixed, patient });
+      date_logged = fixed;
+    }
     const tp             = parseTreatmentPlan(cell(r, 4));
     const recs           = parseNumber(cell(r, 5));
     const booked         = parseNumber(cell(r, 6));
@@ -301,6 +309,12 @@ export async function run(): Promise<void> {
     });
   }
   console.log(`[ca-gsheets] ${parsed.length} non-empty data rows`);
+  if (dateCorrections.length) {
+    console.log(`\n[ca-gsheets] ⚠ ${dateCorrections.length} typo year(s) coerced to ${SOURCE_YEAR}:`);
+    dateCorrections.forEach(d => console.log(`  row ${d.row}: ${d.from} → ${d.to}  (${d.patient ?? '?'})`));
+  } else {
+    console.log(`[ca-gsheets] all dates are ${SOURCE_YEAR} ✓`);
+  }
 
   // Clinician resolution
   const namesInSheet = [...new Set(
