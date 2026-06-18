@@ -619,36 +619,6 @@ export default function DashboardPage() {
           ) : '↻ Refresh'}
         </button>
 
-        {/* Ageing Debts — manual, on-demand only (slow 10-year Nookal fetch). */}
-        <button
-          onClick={() => fetchAgeingDebts(true)}
-          disabled={ageingLoading}
-          title="Load Ageing Debts — slow, manual only"
-          style={{
-            background: ageingLoading ? '#9ca3af' : '#fff',
-            color: ageingLoading ? '#fff' : TEXT,
-            border: '1px solid #e5e7eb', borderRadius: 7,
-            padding: '8px 16px', fontSize: 13, fontWeight: 500,
-            cursor: ageingLoading ? 'not-allowed' : 'pointer',
-            fontFamily: "'DM Sans', sans-serif",
-            transition: 'all 0.15s',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}
-        >
-          {ageingLoading ? (
-            <>
-              <span style={{
-                width: 13, height: 13,
-                border: '2px solid rgba(255,255,255,0.3)',
-                borderTop: '2px solid #fff',
-                borderRadius: '50%', display: 'inline-block',
-                animation: 'spin 0.7s linear infinite',
-              }} />
-              Loading Ageing…
-            </>
-          ) : '💰 Ageing Debts'}
-        </button>
-
         <button
           onClick={() => window.print()}
           disabled={!data || loading}
