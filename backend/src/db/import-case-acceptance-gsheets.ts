@@ -130,19 +130,24 @@ function parseTreatmentPlan(raw: string | null): boolean | null {
 }
 
 /**
- * Any "yes" marker → true; blank → null.
- * Robust to the variants seen across clinic sheets: X/x, TRUE checkbox, YES/Y/1,
- * and every tick glyph (✓ U+2713, ✔ U+2714, ✅ U+2705, ☑ U+2611, √ U+221A) —
- * including ones carrying a trailing emoji variation selector (U+FE0F), which a
- * strict `===` match would miss.
+ * Prepay marks: tick glyph → YES (true); "X"/cross → NO (false); blank → null.
+ *
+ * IMPORTANT: in these sheets a red "X" means NOT offered/accepted (NO), while a
+ * checkmark (✔/✓) means YES. So X must map to FALSE, not TRUE.
+ *   ✔ ✓ ✅ ☑ √ / TRUE / YES / Y / 1  → true  (YES)
+ *   X / NO / N / 0 / FALSE           → false (NO)
+ *   blank                            → null  (renders as "0")
+ * Tick glyphs are matched with a regex so a trailing emoji variation selector
+ * (U+FE0F) still counts.
  */
 function parsePrepay(raw: string | null): boolean | null {
   if (!raw) return null;
   const s = raw.trim();
   if (!s) return null;
-  const up = s.toUpperCase();
-  if (up === 'X' || up === 'TRUE' || up === 'YES' || up === 'Y' || up === '1') return true;
   if (/[✓✔✅☑√]/.test(s)) return true;
+  const up = s.toUpperCase();
+  if (up === 'TRUE' || up === 'YES' || up === 'Y' || up === '1') return true;
+  if (up === 'X' || up === 'NO' || up === 'N' || up === '0' || up === 'FALSE') return false;
   return null;
 }
 
