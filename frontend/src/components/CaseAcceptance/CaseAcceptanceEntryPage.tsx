@@ -747,16 +747,19 @@ function YnPill({ v }: { v: boolean | null }) {
   )
 }
 
-// Prepay columns only: YES (green) when accepted/offered, else a muted "0"
-// (not "NO", not a blank dash) so empty/false rows read as a real zero.
+// Prepay columns only: keep YES/NO for a real true/false, but show a muted
+// "0" (instead of a blank dash) when the value is empty/not recorded.
 function PrepayPill({ v }: { v: boolean | null }) {
-  if (v === true) return (
+  if (v === null || v === undefined) return <Dim>0</Dim>
+  const yes = v === true
+  return (
     <span style={{
-      background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0',
+      background:   yes ? '#ecfdf5' : '#fef2f2',
+      color:        yes ? '#065f46' : '#991b1b',
+      border: `1px solid ${yes ? '#a7f3d0' : '#fecaca'}`,
       padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
-    }}>YES</span>
+    }}>{yes ? 'YES' : 'NO'}</span>
   )
-  return <Dim>0</Dim>
 }
 
 const inputStyle: React.CSSProperties = {
