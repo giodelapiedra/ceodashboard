@@ -4,6 +4,7 @@ import {
   CreateCaseAcceptancePayload, UpdateCaseAcceptancePayload,
   CaseAcceptanceSummary,
 } from '../../api/caseAcceptance.api'
+import { draftsApi, DraftDTO } from '../../api/drafts.api'
 import { usersApi } from '../../api/users.api'
 import {
   CaseAcceptanceDTO,
@@ -13,10 +14,12 @@ import {
 
 const CLINIC_OPTIONS: ClinicId[] = ['newport', 'narrabeen', 'brookvale']
 import { useAuthStore } from '../../store/auth.store'
+import { useDraftResumeStore } from '../../store/draftResume.store'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
+import DraftsPanel from '../shared/DraftsPanel'
 import DateRangePicker, { DateRangeValue } from '../shared/DateRangePicker'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 
@@ -150,6 +153,24 @@ export default function CaseAcceptanceEntryPage() {
   const [form, setForm] = useState<FormState>(emptyForm(user))
   const [saving, setSaving] = useState(false)
 
+  // Saved drafts (this user's own, server-side so they survive logout). ADMIN
+  // can't create entries, so drafts don't apply to them.
+  const isAdmin = user.role === 'ADMIN'
+  const [drafts, setDrafts] = useState<DraftDTO<FormState>[]>([])
+  // The draft currently loaded into the form (null = composing a fresh entry).
+  const [draftId, setDraftId] = useState<string | null>(null)
+  const [savingDraft, setSavingDraft] = useState(false)
+
+  const reloadDrafts = useCallback(async () => {
+    if (isAdmin) return
+    try { setDrafts(await draftsApi.list<FormState>('case_acceptance')) }
+    catch { /* drafts are a convenience — never block the page on them */ }
+  }, [isAdmin])
+  useEffect(() => { reloadDrafts() }, [reloadDrafts])
+
+  // Form has meaningful content worth saving (differs from a blank form).
+  const isFormDirty = JSON.stringify(form) !== JSON.stringify(emptyForm(user))
+
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -197,6 +218,7 @@ export default function CaseAcceptanceEntryPage() {
 
   const startEdit = (row: CaseAcceptanceDTO) => {
     setEditingId(row.id)
+    setDraftId(null)  // editing a real entry is unrelated to drafts
     setForm({
       date_logged:             row.date_logged,
       clinic_id:               row.clinic_id,
@@ -218,8 +240,66 @@ export default function CaseAcceptanceEntryPage() {
 
   const cancelEdit = () => {
     setEditingId(null)
+    setDraftId(null)
     setForm(emptyForm(user))
   }
+
+  // Save the current form as a draft (create the first time, overwrite after).
+  // Drafts are only for fresh entries — never while editing an existing row.
+  const onSaveDraft = async () => {
+    setError('')
+    setSavingDraft(true)
+    try {
+      const meta = {
+        clinic_id:    form.clinic_id || null,
+        patient_name: form.patient_name.trim() || null,
+        form_data:    form,
+      }
+      if (draftId) {
+        await draftsApi.update<FormState>(draftId, meta)
+        toast.success('Draft updated')
+      } else {
+        const created = await draftsApi.create<FormState>({ kind: 'case_acceptance', ...meta })
+        setDraftId(created.id)
+        toast.success('Draft saved — finish it anytime, even after logging out')
+      }
+      await reloadDrafts()
+    } catch (e: any) {
+      const msg = e.response?.data?.error?.message || 'Failed to save draft'
+      setError(msg); toast.error(msg)
+    } finally { setSavingDraft(false) }
+  }
+
+  // Load a saved draft back into the form. Merge over emptyForm so any field
+  // added since the draft was saved still has a sane default.
+  const resumeDraft = (d: DraftDTO<FormState>) => {
+    setEditingId(null)
+    setForm({ ...emptyForm(user), ...d.form_data })
+    setDraftId(d.id)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const deleteDraft = async (d: DraftDTO<FormState>) => {
+    try {
+      await draftsApi.remove(d.id)
+      if (draftId === d.id) { setDraftId(null); setForm(emptyForm(user)) }
+      await reloadDrafts()
+      toast.success('Draft deleted')
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || 'Failed to delete draft')
+    }
+  }
+
+  // "Resume" from the My Drafts tab hands the draft off via the store — load it
+  // into the form once on arrival, then clear the hand-off.
+  const { pending, clear: clearPending } = useDraftResumeStore()
+  useEffect(() => {
+    if (pending && pending.kind === 'case_acceptance') {
+      resumeDraft(pending as unknown as DraftDTO<FormState>)
+      clearPending()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending])
 
   const onSubmit = async () => {
     setError('')
@@ -269,8 +349,13 @@ export default function CaseAcceptanceEntryPage() {
         await caseAcceptanceApi.create(payload)
         toast.success(`Added case entry for ${patientName}`)
       }
+      // If this entry was promoted from a saved draft, discard the draft now.
+      if (!editingId && draftId) {
+        try { await draftsApi.remove(draftId) } catch { /* best-effort cleanup */ }
+      }
       cancelEdit()
       await load()
+      await reloadDrafts()
     } catch (e: any) {
       const details = e.response?.data?.error?.details
       const detailsMsg = Array.isArray(details)
@@ -324,9 +409,11 @@ export default function CaseAcceptanceEntryPage() {
             fontSize: 14, fontWeight: 600, color: TEXT, marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            <span>{editingId ? 'Editing entry' : 'New case entry'}</span>
-            {editingId && (
-              <button onClick={cancelEdit} style={smallBtnStyle}>Cancel edit</button>
+            <span>{editingId ? 'Editing entry' : draftId ? 'Resuming saved draft' : 'New case entry'}</span>
+            {(editingId || draftId) && (
+              <button onClick={cancelEdit} style={smallBtnStyle}>
+                {editingId ? 'Cancel edit' : 'Clear'}
+              </button>
             )}
           </div>
 
@@ -469,11 +556,35 @@ export default function CaseAcceptanceEntryPage() {
           </div>
 
           <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            {/* Save draft is only for new entries — not while editing a real row. */}
+            {!editingId && (
+              <button
+                onClick={onSaveDraft}
+                disabled={savingDraft || saving || !isFormDirty}
+                title={isFormDirty ? 'Save your progress to finish later' : 'Nothing to save yet'}
+                style={{
+                  ...draftBtnStyle,
+                  ...(savingDraft || saving || !isFormDirty ? disabledBtnStyle : {}),
+                }}
+              >
+                {savingDraft ? 'Saving…' : draftId ? 'Update draft' : 'Save draft'}
+              </button>
+            )}
             <button onClick={onSubmit} disabled={saving} style={primaryBtnStyle}>
               {saving ? 'Saving…' : editingId ? 'Update entry' : 'Add entry'}
             </button>
           </div>
         </div>
+        )}
+
+        {/* Saved drafts — this user's own, resume anytime (even after re-login) */}
+        {!isAdmin && (
+          <DraftsPanel
+            drafts={drafts}
+            onResume={resumeDraft}
+            onDelete={deleteDraft}
+            busy={saving || savingDraft}
+          />
         )}
 
         {/* Summary cards — always visible, scoped to the active filter */}
@@ -776,4 +887,13 @@ const smallBtnStyle: React.CSSProperties = {
   background: '#fff', color: TEXT, border: `1px solid ${BORDER}`,
   borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 500,
   cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+}
+// Secondary action — outlined teal, sits beside the primary "Add entry".
+const draftBtnStyle: React.CSSProperties = {
+  background: '#fff', color: TEAL, border: `1px solid ${TEAL}`,
+  borderRadius: 7, padding: '9px 18px', fontSize: 13, fontWeight: 600,
+  cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+}
+const disabledBtnStyle: React.CSSProperties = {
+  background: '#f3f4f6', color: TEXT_SOFT, borderColor: BORDER, cursor: 'not-allowed',
 }

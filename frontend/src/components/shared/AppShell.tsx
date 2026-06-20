@@ -39,14 +39,17 @@ const NAV_TREE: Record<Role, NavItem[]> = {
   CLINICIAN: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
+    { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
   FRONT_DESK: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
+    { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
   FRONT_DESK_GLOBAL: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
+    { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
   ADSPEND: [
     { kind: 'link', page: 'ad-spend-entry',        label: 'Ad Spend' },

@@ -10,6 +10,7 @@ export type AppPage =
   | 'admin-activity-log'       // ADMIN: audit log viewer
   | 'dropout-entry'            // CLINICIAN / FRONT_DESK: dropout input form
   | 'case-acceptance-entry'    // CLINICIAN / FRONT_DESK: case acceptance input form
+  | 'drafts'                   // CLINICIAN / FRONT_DESK: all their saved drafts
   | 'ad-spend-entry';          // ADSPEND: ad spend input form (only page this role sees)
 
 interface NavState {

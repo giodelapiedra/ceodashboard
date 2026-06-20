@@ -1,6 +1,8 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { useAuthStore } from './store/auth.store'
 import { useNavStore } from './store/nav.store'
+import { useToastStore } from './store/toast.store'
+import { draftsApi } from './api/drafts.api'
 import LoginPage from './components/Auth/LoginPage'
 import DashboardPage from './components/Dashboard/DashboardPage'
 import UserManagementPage from './components/Admin/UserManagementPage'
@@ -11,6 +13,7 @@ import CaseAcceptanceAdminPage from './components/Admin/CaseAcceptanceAdminPage'
 import AuditLogPage from './components/Admin/AuditLogPage'
 import DropoutEntryPage from './components/Dropouts/DropoutEntryPage'
 import CaseAcceptanceEntryPage from './components/CaseAcceptance/CaseAcceptanceEntryPage'
+import DraftsPage from './components/Drafts/DraftsPage'
 import AdSpendEntryPage from './components/AdSpend/AdSpendEntryPage'
 import ToastContainer from './components/shared/ToastContainer'
 import ConfirmDialog from './components/shared/ConfirmDialog'
@@ -34,12 +37,40 @@ export default function App() {
       // The ad-spend encoder only ever sees the ad-spend entry page.
       if (page !== 'ad-spend-entry') navigate('ad-spend-entry')
     } else {
-      if (!['dropout-entry', 'case-acceptance-entry'].includes(page)) {
+      if (!['dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
         navigate('dropout-entry')
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.role])
+
+  // On login, remind encoders if they left unfinished drafts behind. Fires once
+  // per login (keyed on user id) — restored sessions count as a login too.
+  const remindedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!user) { remindedFor.current = null; return }
+    const isEncoder = ['CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLOBAL'].includes(user.role)
+    if (!isEncoder) return
+    if (remindedFor.current === user.id) return  // already reminded this login
+    remindedFor.current = user.id
+    ;(async () => {
+      try {
+        const [dropouts, cases] = await Promise.all([
+          draftsApi.list('dropout'),
+          draftsApi.list('case_acceptance'),
+        ])
+        const n = dropouts.length + cases.length
+        if (n > 0) {
+          useToastStore.getState().show(
+            'info',
+            `You have ${n} saved draft${n === 1 ? '' : 's'} — open “My Drafts” to finish ${n === 1 ? 'it' : 'them'}.`,
+            8000,
+          )
+        }
+      } catch { /* reminder is best-effort — never block the app on it */ }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id])
 
   if (isLoading) {
     return (
@@ -86,9 +117,10 @@ export default function App() {
     // regardless of nav state. No dashboard, dropouts, or case acceptance.
     page_node = <AdSpendEntryPage />
   } else {
-    // CLINICIAN, FRONT_DESK, FRONT_DESK_GLOBAL — same two pages.
-    if (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
-    else                                  page_node = <DropoutEntryPage />
+    // CLINICIAN, FRONT_DESK, FRONT_DESK_GLOBAL — entry pages + drafts.
+    if      (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
+    else if (page === 'drafts')                page_node = <DraftsPage />
+    else                                       page_node = <DropoutEntryPage />
   }
 
   return <>{page_node}<ToastContainer /><ConfirmDialog /><PromptDialog /></>
