@@ -10,6 +10,7 @@ import { confirmDialog } from '../../store/confirm.store'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePaginationParams } from '../../hooks/usePaginationParams'
 
 // ── Constants ─────────────────────────────────────────────────
 const TEAL      = '#0f6e56'
@@ -415,8 +416,7 @@ export default function AdSpendEntryPage() {
   const [total,   setTotal]   = useState(0)
   const [loading, setLoading] = useState(true)
   const [listErr, setListErr] = useState('')
-  const [limit,   setLimit]   = useState(50)
-  const [offset,  setOffset]  = useState(0)
+  const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
   const [searchInput, setSearchInput] = useState('')
   const search = useDebouncedValue(searchInput.trim(), 300)
   const [summary, setSummary] = useState<AdSpendSummary | null>(null)
@@ -424,7 +424,7 @@ export default function AdSpendEntryPage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo,   setDateTo]   = useState('')
 
-  useEffect(() => { setOffset(0) }, [search, limit, dateFrom, dateTo])
+  useEffect(() => { resetPage() }, [search, dateFrom, dateTo, resetPage])
 
   const loadEntries = useCallback(async () => {
     setLoading(true); setListErr('')
@@ -727,7 +727,7 @@ export default function AdSpendEntryPage() {
 
               {!loading && total > 0 && (
                 <Pagination total={total} limit={limit} offset={offset}
-                  onChange={setOffset} onLimitChange={n => { setLimit(n); setOffset(0) }} />
+                  onChange={setOffset} onLimitChange={setLimit} />
               )}
             </div>
           </>

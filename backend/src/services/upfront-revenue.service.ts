@@ -28,22 +28,28 @@ export interface UpfrontRevenueReport {
   details:     UpfrontCreditRow[];
 }
 
-const MONTH_NUM: Record<string, number> = {
-  Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12,
-};
-const pad2 = (n: number) => String(n).padStart(2, '0');
-
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+/**
+ * Nookal returns credit dates as JS `Date.toString()` strings, e.g.
+ * "Sat Jun 27 2026 02:30:06 GMT+1000 (Australian Eastern Standard Time)".
+ * It's tempting to read the weekday/month/day/year straight out of the
+ * string (Sydney-local calendar day) — but Nookal's OWN "Account Credits"
+ * report buckets by UTC calendar day, not local day. Verified against
+ * Nookal's UI directly: Newport, 01/06/2026-30/06/2026 reports a Total
+ * Credit of $10,452.80, which only matches when a credit timestamped
+ * "Wed Jul 01 2026 02:06:23 GMT+1000" (=16:06 UTC Jun 30) is counted as
+ * June. Text-extracting the literal date gives $9,782.30 instead — wrong,
+ * because it disagrees with Nookal's own report. So: convert to UTC.
+ */
 function nookalDayISO(s: string | null | undefined): string | null {
   if (!s) return null;
-  const m = s.match(/^\w{3}\s+(\w{3})\s+(\d{2})\s+(\d{4})/);
-  if (!m) return null;
-  const mon = MONTH_NUM[m[1]];
-  return mon ? `${m[3]}-${pad2(mon)}-${m[2]}` : null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
 }
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -69,6 +75,7 @@ export const upfrontRevenueService = {
     const kept: V3Credit[] = [];
     for (const c of all) {
       if (c.void) continue;
+      if ((c.amount ?? 0) <= 0) continue;  // exclude deductions (used credits); include all positive receipts regardless of fromAdjustment
       if (c.locationID !== targetLocation) continue;
       const day = nookalDayISO(c.date);
       if (!day || day < dateFrom || day > dateTo) continue;

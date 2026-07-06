@@ -29,7 +29,6 @@ import path from 'path';
 import { google } from 'googleapis';
 import { pool, query, withTransaction } from './pool';
 import { env } from '../config/env';
-import { authService } from '../services/auth.service';
 import { userRepository, UserRow } from '../repositories/user.repository';
 import { ClinicId, isClinicId } from '../shared/roles';
 
@@ -198,23 +197,24 @@ function firstNameToEmail(firstName: string): string {
   return `${local}@physioward.com.au`;
 }
 
+/**
+ * Look up a clinician by first name — does NOT auto-create.
+ *
+ * Historically this created a new CLINICIAN account for any unmatched name,
+ * which silently provisioned 125 bogus login accounts from stray/one-off
+ * text in the Newport sheet's "Clinician name" column (confirmed with Sam
+ * 2026-07-03: those names were never real clinicians). Unmatched names are
+ * now reported as skipped rows so a human decides whether to add the
+ * clinician via the Admin UI before re-running the import.
+ */
 async function ensureClinician(
-  firstName: string, clinicId: string, commit: boolean, tempPwd: string
-): Promise<{ id: string | null; created: boolean; reused: boolean; email: string }> {
+  firstName: string, clinicId: string
+): Promise<{ id: string | null; reused: boolean; email: string }> {
   const inTarget = await findClinicianByFirstName(firstName, clinicId);
-  if (inTarget) return { id: inTarget.id, created: false, reused: false, email: inTarget.email };
+  if (inTarget) return { id: inTarget.id, reused: false, email: inTarget.email };
   const elsewhere = await findClinicianAnywhere(firstName);
-  if (elsewhere) return { id: elsewhere.id, created: false, reused: true, email: elsewhere.email };
-  const baseEmail = firstNameToEmail(firstName);
-  let email = baseEmail;
-  const taken = await userRepository.findByEmail(baseEmail);
-  if (taken) email = `${firstName.toLowerCase().replace(/[^a-z0-9]/g, '')}-${clinicId}@physioward.com.au`;
-  if (!commit) return { id: null, created: true, reused: false, email };
-  const passwordHash = await authService.hashPassword(tempPwd);
-  const created = await userRepository.create({
-    email, passwordHash, role: 'CLINICIAN', full_name: firstName, clinic_id: clinicId,
-  });
-  return { id: created.id, created: true, reused: false, email: created.email };
+  if (elsewhere) return { id: elsewhere.id, reused: true, email: elsewhere.email };
+  return { id: null, reused: false, email: firstNameToEmail(firstName) };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -324,32 +324,20 @@ export async function run(): Promise<void> {
   )];
   console.log(`[ca-gsheets] clinicians: ${namesInSheet.join(', ')}`);
 
-  const needsCreate = commit && await (async () => {
-    for (const n of namesInSheet) {
-      if (!await findClinicianByFirstName(n, CLINIC) && !await findClinicianAnywhere(n)) return true;
-    }
-    return false;
-  })();
-  const tempPwd = (commit && needsCreate)
-    ? (() => {
-        const p = process.env.IMPORT_CLINICIAN_TEMP_PASSWORD?.trim() ?? '';
-        if (p.length < 8) throw new Error('IMPORT_CLINICIAN_TEMP_PASSWORD must be ≥8 chars.');
-        return p;
-      })()
-    : '';
-
   const clinicianMap = new Map<string, string>();
+  const unresolved: string[] = [];
   console.log('[ca-gsheets] resolving clinicians:');
   for (const name of namesInSheet) {
-    const r = await ensureClinician(name, CLINIC, commit, tempPwd);
-    if (r.id === null)  console.log(`  + would create  ${name.padEnd(12)}  ${r.email}`);
-    else if (r.created) console.log(`  + created       ${name.padEnd(12)}  ${r.email}  (id=${r.id})`);
+    const r = await ensureClinician(name, CLINIC);
+    if (r.id === null) { console.log(`  ✗ NOT FOUND     ${name.padEnd(12)}  (would be ${r.email})`); unresolved.push(name); }
     else if (r.reused)  console.log(`  ↻ reused        ${name.padEnd(12)}  ${r.email}  (id=${r.id}, cross-clinic)`);
     else                console.log(`  ✓ exists        ${name.padEnd(12)}  ${r.email}  (id=${r.id})`);
     if (r.id !== null) clinicianMap.set(name, r.id);
   }
-  if (!commit) {
-    for (const n of namesInSheet) { if (!clinicianMap.has(n)) clinicianMap.set(n, '<dry-run>'); }
+  if (unresolved.length) {
+    console.log(`\n[ca-gsheets] ⚠ ${unresolved.length} clinician name(s) not found — their rows will be skipped:`);
+    console.log(`  ${unresolved.join(', ')}`);
+    console.log('[ca-gsheets]   Add real clinicians via the Admin UI first if these are legit, then re-run.');
   }
 
   // Validate rows

@@ -3,6 +3,8 @@ import { useAuthStore } from './store/auth.store'
 import { useNavStore } from './store/nav.store'
 import { useToastStore } from './store/toast.store'
 import { draftsApi } from './api/drafts.api'
+import { deleteRequestsApi } from './api/deleteRequests.api'
+import { editRequestsApi } from './api/editRequests.api'
 import LoginPage from './components/Auth/LoginPage'
 import DashboardPage from './components/Dashboard/DashboardPage'
 import UserManagementPage from './components/Admin/UserManagementPage'
@@ -14,7 +16,11 @@ import AuditLogPage from './components/Admin/AuditLogPage'
 import DropoutEntryPage from './components/Dropouts/DropoutEntryPage'
 import CaseAcceptanceEntryPage from './components/CaseAcceptance/CaseAcceptanceEntryPage'
 import DraftsPage from './components/Drafts/DraftsPage'
+import DeleteRequestsPage from './components/Admin/DeleteRequestsPage'
+import EditRequestsPage from './components/Admin/EditRequestsPage'
+import ClinicianProfilePage from './components/Admin/ClinicianProfilePage'
 import AdSpendEntryPage from './components/AdSpend/AdSpendEntryPage'
+import ClinicianHomePage from './components/Clinician/ClinicianHomePage'
 import ToastContainer from './components/shared/ToastContainer'
 import ConfirmDialog from './components/shared/ConfirmDialog'
 import PromptDialog from './components/shared/PromptDialog'
@@ -30,12 +36,16 @@ export default function App() {
   useEffect(() => {
     if (!user) return
     if (user.role === 'ADMIN') {
-      if (!['dashboard', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-activity-log', 'dropout-entry', 'case-acceptance-entry', 'ad-spend-entry'].includes(page)) {
+      if (!['dashboard', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-delete-requests', 'admin-edit-requests', 'admin-activity-log', 'admin-clinician-profile', 'dropout-entry', 'case-acceptance-entry', 'ad-spend-entry'].includes(page)) {
         navigate('dashboard')
       }
     } else if (user.role === 'ADSPEND') {
       // The ad-spend encoder only ever sees the ad-spend entry page.
       if (page !== 'ad-spend-entry') navigate('ad-spend-entry')
+    } else if (user.role === 'CLINICIAN') {
+      if (!['clinician-home', 'dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
+        navigate('clinician-home')
+      }
     } else {
       if (!['dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
         navigate('dropout-entry')
@@ -49,23 +59,42 @@ export default function App() {
   const remindedFor = useRef<string | null>(null)
   useEffect(() => {
     if (!user) { remindedFor.current = null; return }
-    const isEncoder = ['CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLOBAL'].includes(user.role)
-    if (!isEncoder) return
     if (remindedFor.current === user.id) return  // already reminded this login
     remindedFor.current = user.id
+    const role = user.role
     ;(async () => {
       try {
-        const [dropouts, cases] = await Promise.all([
-          draftsApi.list('dropout'),
-          draftsApi.list('case_acceptance'),
-        ])
-        const n = dropouts.length + cases.length
-        if (n > 0) {
-          useToastStore.getState().show(
-            'info',
-            `You have ${n} saved draft${n === 1 ? '' : 's'} — open “My Drafts” to finish ${n === 1 ? 'it' : 'them'}.`,
-            8000,
-          )
+        if (['CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLOBAL'].includes(role)) {
+          // Encoders: remind about unfinished drafts.
+          const [dropouts, cases] = await Promise.all([
+            draftsApi.list('dropout'),
+            draftsApi.list('case_acceptance'),
+          ])
+          const n = dropouts.length + cases.length
+          if (n > 0) {
+            useToastStore.getState().show(
+              'info',
+              `You have ${n} saved draft${n === 1 ? '' : 's'} — open “My Drafts” to finish ${n === 1 ? 'it' : 'them'}.`,
+              8000,
+            )
+          }
+        } else if (role === 'ADMIN') {
+          // Admin: remind about pending delete and edit requests.
+          const [delReqs, editReqs] = await Promise.all([
+            deleteRequestsApi.listPending(),
+            editRequestsApi.listPending(),
+          ])
+          const total = delReqs.length + editReqs.length
+          if (total > 0) {
+            const parts: string[] = []
+            if (delReqs.length  > 0) parts.push(`${delReqs.length} delete`)
+            if (editReqs.length > 0) parts.push(`${editReqs.length} edit`)
+            useToastStore.getState().show(
+              'info',
+              `${parts.join(' + ')} request${total === 1 ? '' : 's'} awaiting approval — see Admin menu.`,
+              8000,
+            )
+          }
         }
       } catch { /* reminder is best-effort — never block the app on it */ }
     })()
@@ -104,7 +133,10 @@ export default function App() {
     else if (page === 'admin-dropout-analytics')  page_node = <DropoutAnalyticsPage />
     else if (page === 'admin-ceo-analytics')      page_node = <CEOAnalyticsPage />
     else if (page === 'admin-case-acceptance')    page_node = <CaseAcceptanceAdminPage />
+    else if (page === 'admin-delete-requests')    page_node = <DeleteRequestsPage />
+    else if (page === 'admin-edit-requests')      page_node = <EditRequestsPage />
     else if (page === 'admin-activity-log')       page_node = <AuditLogPage />
+    else if (page === 'admin-clinician-profile')  page_node = <ClinicianProfilePage />
     // ADMIN also has access to the data-entry pages so they can edit / delete
     // any row. The create form on those pages is hidden for ADMINs (they're
     // blocked from creating in the backend).
@@ -116,8 +148,13 @@ export default function App() {
     // Hard lock: the ad-spend encoder can ONLY ever render this one page,
     // regardless of nav state. No dashboard, dropouts, or case acceptance.
     page_node = <AdSpendEntryPage />
+  } else if (user.role === 'CLINICIAN') {
+    if      (page === 'dropout-entry')         page_node = <DropoutEntryPage />
+    else if (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
+    else if (page === 'drafts')                page_node = <DraftsPage />
+    else                                       page_node = <ClinicianHomePage />
   } else {
-    // CLINICIAN, FRONT_DESK, FRONT_DESK_GLOBAL — entry pages + drafts.
+    // FRONT_DESK, FRONT_DESK_GLOBAL — entry pages + drafts.
     if      (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
     else if (page === 'drafts')                page_node = <DraftsPage />
     else                                       page_node = <DropoutEntryPage />

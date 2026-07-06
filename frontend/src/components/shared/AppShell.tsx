@@ -31,16 +31,14 @@ const NAV_TREE: Record<Role, NavItem[]> = {
       { page: 'case-acceptance-entry', label: 'Manage entries'   },
     ]},
     { kind: 'group', label: 'Admin', items: [
-      { page: 'admin-users',         label: 'User Management' },
-      { page: 'admin-activity-log',  label: 'Activity Log'    },
-      { page: 'ad-spend-entry',      label: 'Ad Spend'        },
+      { page: 'admin-users',           label: 'User Management'  },
+      { page: 'admin-delete-requests', label: 'Delete Requests'  },
+      { page: 'admin-edit-requests',  label: 'Edit Requests'    },
+      { page: 'admin-activity-log',    label: 'Activity Log'     },
+      { page: 'ad-spend-entry',        label: 'Ad Spend'         },
     ]},
   ],
-  CLINICIAN: [
-    { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
-    { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
-    { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
-  ],
+  CLINICIAN: [],  // clinician nav is handled by ClinicianHomePage landing screen
   FRONT_DESK: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
@@ -120,6 +118,25 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
                 onNavigate={(p) => { setOpenGroup(null); navigate(p) }}
               />
             ))}
+            {user.role === 'CLINICIAN' && page !== 'clinician-home' && (
+              <button
+                onClick={() => navigate('clinician-home')}
+                style={{
+                  background: 'transparent',
+                  color: '#fff',
+                  border: '1px solid rgba(255,255,255,0.20)',
+                  borderRadius: 6,
+                  padding: '7px 14px',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  fontFamily: "'DM Sans', sans-serif",
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                ← Home
+              </button>
+            )}
           </nav>
         </div>
 

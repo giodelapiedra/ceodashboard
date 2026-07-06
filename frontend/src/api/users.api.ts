@@ -17,6 +17,9 @@ export interface UpdateUserPayload {
 }
 
 export const usersApi = {
+  get: (id: string): Promise<User> =>
+    api.get(`/api/users/${id}`).then(r => r.data),
+
   list: (filters?: { clinic_id?: ClinicId; role?: Role; active?: boolean }): Promise<User[]> =>
     api.get('/api/users', {
       params: filters && {

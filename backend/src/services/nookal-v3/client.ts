@@ -88,6 +88,24 @@ class NookalV3Client {
     return this.tokenInFlight;
   }
 
+  /**
+   * Invalidate the cached token, but only if it's still the exact token
+   * that just failed. Concurrent paginated queries share one token; when
+   * it expires mid-flight, several requests can get a 401 in quick
+   * succession. If each one unconditionally nulled `this.token`, a
+   * request that fails AFTER another concurrent request has already
+   * refreshed it would wipe out that fresh, valid token — forcing yet
+   * another refresh, which invalidates the previous one at Nookal's end
+   * (only the latest issued token is valid) and can cascade into a
+   * retry-budget-exhausting storm. Comparing by value ensures a stale
+   * failure never clobbers a token someone else already renewed.
+   */
+  private invalidateToken(staleValue: string) {
+    if (this.token?.value === staleValue) {
+      this.token = null;
+    }
+  }
+
   private async fetchToken(): Promise<string> {
     try {
       const res = await this.http.post<TokenResponse>(
@@ -153,7 +171,7 @@ class NookalV3Client {
       // Auth failure or token expired — refresh and retry once.
       const isExpired = /token has expired|please supply a current bearer/i.test(rawBody);
       if (res.status === 401 || isExpired) {
-        this.token = null;
+        this.invalidateToken(token);
         throw new UnauthorizedError();
       }
 

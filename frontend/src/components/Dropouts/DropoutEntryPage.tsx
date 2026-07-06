@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import { dropoutsApi, CreateDropoutPayload, UpdateDropoutPayload } from '../../api/dropouts.api'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { dropoutsApi, CreateDropoutPayload, UpdateDropoutPayload, DropoutSummary } from '../../api/dropouts.api'
 import { draftsApi, DraftDTO } from '../../api/drafts.api'
+import { deleteRequestsApi } from '../../api/deleteRequests.api'
+import { editRequestsApi } from '../../api/editRequests.api'
 import { usersApi } from '../../api/users.api'
 import {
   DropoutDTO, DROPOUT_STATUSES, DROPOUT_REASONS, DropoutStatus, DropoutReason,
@@ -13,11 +15,15 @@ import { useAuthStore } from '../../store/auth.store'
 import { useDraftResumeStore } from '../../store/draftResume.store'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
+import { promptDialog } from '../../store/prompt.store'
 import { exportDropoutsXlsx } from '../../lib/exportDropoutsXlsx'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
+import DateRangePicker from '../shared/DateRangePicker'
 import DraftsPanel from '../shared/DraftsPanel'
+import DraftBlockerModal from '../shared/DraftBlockerModal'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePaginationParams } from '../../hooks/usePaginationParams'
 
 const TEAL      = '#0f6e56'
 const TEXT      = '#111827'
@@ -25,14 +31,16 @@ const TEXT_SOFT = '#4b5563'
 const BORDER    = '#e5e7eb'
 const DANGER    = '#b91c1c'
 
-const SAME_DAY_WINDOW_MS = 24 * 60 * 60 * 1000
-
 function todayISO(): string {
   const d = new Date()
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const dd = String(d.getDate()).padStart(2, '0')
   return `${y}-${m}-${dd}`
+}
+function daysAgoISO(days: number): string {
+  const d = new Date(); d.setDate(d.getDate() - days)
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
 interface FormState {
@@ -88,29 +96,71 @@ export default function DropoutEntryPage() {
   const [total,   setTotal]   = useState(0)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
+  const [summary, setSummary] = useState<DropoutSummary>({ total: 0, byStatus: {}, byReason: {}, byClinic: {}, byDay: [] })
 
-  const [limit,  setLimit]  = useState(50)
-  const [offset, setOffset] = useState(0)
+  const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
 
   const [searchInput, setSearchInput] = useState('')
   const search = useDebouncedValue(searchInput.trim(), 300)
 
-  // Reset to page 1 whenever search or page-size changes.
-  useEffect(() => { setOffset(0) }, [search, limit])
+  const [dateFrom,       setDateFrom]       = useState(daysAgoISO(30))
+  const [dateTo,         setDateTo]         = useState(todayISO())
+  const [statusFilter,   setStatusFilter]   = useState<DropoutStatus | ''>('')
+  const [reasonFilter,   setReasonFilter]   = useState<DropoutReason | ''>('')
+  const [clinicianFilter, setClinicianFilter] = useState('')
+
+  useEffect(() => { resetPage() }, [search, dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, resetPage])
 
   const [clinicians, setClinicians] = useState<User[]>([])
+
+  const isAdmin = user.role === 'ADMIN'
+  const [activeTab, setActiveTab] = useState<'encode' | 'entries'>('encode')
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm(user))
   const [saving, setSaving] = useState(false)
 
+  // Original row being edited — used to compute the diff patch for edit requests.
+  const editingRowRef = useRef<DropoutDTO | null>(null)
+
+  // Entry ids this user already has a pending EDIT request for — swaps the
+  // Edit button for an "Edit pending" badge. (ADMIN edits directly.)
+  const [pendingEdits, setPendingEdits] = useState<Set<string>>(new Set())
+  const reloadPendingEdits = useCallback(async () => {
+    if (isAdmin) return
+    try {
+      const refs = await editRequestsApi.mine()
+      setPendingEdits(new Set(refs.filter(r => r.entity_type === 'dropout').map(r => r.entity_id)))
+    } catch { /* non-fatal */ }
+  }, [isAdmin])
+  useEffect(() => { reloadPendingEdits() }, [reloadPendingEdits])
+
+  // Recently rejected edit requests — shown as dismissible banners.
+  const [rejectedEdits, setRejectedEdits] = useState<import('../../api/editRequests.api').EditRequestDTO[]>([])
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('pw:edit-rejected:dismissed') || '[]')) }
+    catch { return new Set() }
+  })
+  useEffect(() => {
+    if (isAdmin) return
+    editRequestsApi.myRejected().then(list => {
+      setRejectedEdits(list.filter(r => r.entity_type === 'dropout'))
+    }).catch(() => {})
+  }, [isAdmin])
+  const dismissRejected = (id: string) => {
+    const next = new Set(dismissedIds).add(id)
+    setDismissedIds(next)
+    try { localStorage.setItem('pw:edit-rejected:dismissed', JSON.stringify([...next])) } catch { /* quota */ }
+  }
+  const visibleRejections = rejectedEdits.filter(r => !dismissedIds.has(r.id))
+
   // Saved drafts (this user's own, server-side so they survive logout). ADMIN
   // can't create entries, so drafts don't apply to them.
-  const isAdmin = user.role === 'ADMIN'
   const [drafts, setDrafts] = useState<DraftDTO<FormState>[]>([])
   // The draft currently loaded into the form (null = composing a fresh entry).
   const [draftId, setDraftId] = useState<string | null>(null)
   const [savingDraft, setSavingDraft] = useState(false)
+  const [showDraftBlocker, setShowDraftBlocker] = useState(false)
 
   const reloadDrafts = useCallback(async () => {
     if (isAdmin) return
@@ -119,19 +169,43 @@ export default function DropoutEntryPage() {
   }, [isAdmin])
   useEffect(() => { reloadDrafts() }, [reloadDrafts])
 
+  // Entry ids this user already has a pending delete request for — used to
+  // swap the Delete button for a "Delete requested" badge. (ADMIN deletes
+  // directly, so it doesn't apply to them.)
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set())
+  const reloadPending = useCallback(async () => {
+    if (isAdmin) return
+    try {
+      const refs = await deleteRequestsApi.mine()
+      setPendingDeletes(new Set(refs.filter(r => r.entity_type === 'dropout').map(r => r.entity_id)))
+    } catch { /* non-fatal */ }
+  }, [isAdmin])
+  useEffect(() => { reloadPending() }, [reloadPending])
+
+  const filterParams = {
+    date_from:    dateFrom     || undefined,
+    date_to:      dateTo       || undefined,
+    status:       statusFilter || undefined,
+    reason:       reasonFilter || undefined,
+    clinician_id: clinicianFilter || undefined,
+    search:       search       || undefined,
+  }
+
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const res = await dropoutsApi.list({
-        limit, offset,
-        search: search || undefined,
-      })
+      const [res, sum] = await Promise.all([
+        dropoutsApi.list({ ...filterParams, limit, offset }),
+        dropoutsApi.summary(filterParams),
+      ])
       setRows(res.data)
       setTotal(res.pagination.total)
+      setSummary(sum)
     } catch (e: any) {
       setError(e.response?.data?.error?.message || 'Failed to load dropouts')
     } finally { setLoading(false) }
-  }, [limit, offset, search])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, search, limit, offset])
 
   useEffect(() => { load() }, [load])
 
@@ -144,6 +218,7 @@ export default function DropoutEntryPage() {
   }, [])
 
   const startEdit = (row: DropoutDTO) => {
+    editingRowRef.current = row
     setEditingId(row.id)
     setDraftId(null)  // editing a real entry is unrelated to drafts
     setForm({
@@ -160,6 +235,7 @@ export default function DropoutEntryPage() {
       reason:                      row.reason ?? '',
       notes:                       row.notes ?? '',
     })
+    if (isClinician) setActiveTab('encode')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -186,9 +262,13 @@ export default function DropoutEntryPage() {
   }
 
   const cancelEdit = () => {
+    editingRowRef.current = null
     setEditingId(null)
     setDraftId(null)
     setForm(emptyForm(user))
+    // After finishing/cancelling an edit, send clinician back to entries tab
+    // so they can see their list and the Edit/Request Delete buttons again.
+    if (isClinician) setActiveTab('entries')
   }
 
   // Save the current form as a draft (create the first time, overwrite after).
@@ -229,6 +309,7 @@ export default function DropoutEntryPage() {
     setEditingId(null)
     setForm({ ...emptyForm(user), ...d.form_data })
     setDraftId(d.id)
+    if (isClinician) setActiveTab('encode')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -257,11 +338,79 @@ export default function DropoutEntryPage() {
   const onSubmit = async () => {
     setError('')
 
+    // Block new entry creation when unfinished drafts exist and the user is
+    // NOT currently resuming one of them.
+    if (!editingId && !draftId && drafts.length > 0) {
+      setShowDraftBlocker(true)
+      return
+    }
+
     if (picksClinic && !form.clinic_id)        return setError('Clinic is required')
     if (!form.patient_name.trim())             return setError('Patient name is required')
     if (!form.clinician_id)                    return setError('Clinician is required')
     if (!form.status)                          return setError('Status is required')
     if (!form.reason)                          return setError('Reason is required')
+
+    // Non-admin editing an existing row → submit an edit request for admin approval.
+    if (editingId && !isAdmin) {
+      const reason = await promptDialog.ask({
+        title:        'Why are you editing this entry?',
+        message:      `Patient: ${form.patient_name.trim()}\n\nProvide a reason so the admin can review and approve your changes.`,
+        placeholder:  'e.g. Wrong patient name, incorrect date, wrong status…',
+        confirmLabel: 'Submit for approval',
+      })
+      if (reason === null) return  // user cancelled
+
+      setSaving(true)
+      try {
+        const original = editingRowRef.current!
+        const patch: Record<string, unknown> = {}
+
+        const patientName = form.patient_name.trim()
+        const notes       = form.notes.trim() || null
+        const frontStaff  = isReceptionist ? undefined : (form.front_staff_name || null)
+
+        if (!isReceptionist && frontStaff !== original.front_staff_name)
+          patch.front_staff_name = frontStaff
+        if (form.clinician_id !== original.clinician_id)
+          patch.clinician_id = form.clinician_id
+        if (patientName !== original.patient_name)
+          patch.patient_name = patientName
+        if (form.date_logged !== original.date_logged)
+          patch.date_logged = form.date_logged
+        // Array comparison — check if sorted lists differ
+        const origDates = [...original.appointment_cancelled_dates].sort().join(',')
+        const newDates  = [...form.appointment_cancelled_dates].sort().join(',')
+        if (newDates !== origDates)
+          patch.appointment_cancelled_dates = form.appointment_cancelled_dates
+        if (form.status && form.status !== original.status)
+          patch.status = form.status
+        if (form.reason && form.reason !== original.reason)
+          patch.reason = form.reason
+        if (notes !== original.notes)
+          patch.notes = notes
+
+        if (Object.keys(patch).length === 0) {
+          setSaving(false)
+          return setError('No changes detected — edit something before submitting')
+        }
+
+        await editRequestsApi.create({
+          entity_type: 'dropout',
+          entity_id:   editingId,
+          reason:      reason.trim() || 'No reason provided',
+          patch,
+        })
+        toast.success('Edit request submitted — waiting for admin approval')
+        cancelEdit()
+        await load()
+        await reloadPendingEdits()
+      } catch (e: any) {
+        const msg = e.response?.data?.error?.message || 'Failed to submit edit request'
+        setError(msg); toast.error(msg)
+      } finally { setSaving(false) }
+      return
+    }
 
     setSaving(true)
     const patientName = form.patient_name.trim()
@@ -328,10 +477,7 @@ export default function DropoutEntryPage() {
       const all: DropoutDTO[] = []
       let cursor = 0
       while (true) {
-        const res = await dropoutsApi.list({
-          limit: PAGE, offset: cursor,
-          search: search || undefined,
-        })
+        const res = await dropoutsApi.list({ ...filterParams, limit: PAGE, offset: cursor })
         all.push(...res.data)
         if (!res.pagination.hasMore || res.data.length === 0) break
         cursor += res.data.length
@@ -363,13 +509,31 @@ export default function DropoutEntryPage() {
     }
   }
 
+  // Non-admin asks an admin to delete their own entry (no direct delete).
+  const onRequestDelete = async (row: DropoutDTO) => {
+    const reason = await promptDialog.ask({
+      title:        'Request entry deletion',
+      message:      `Patient: ${row.patient_name}\nLogged: ${row.date_logged}\n\nThis will be sent to an admin for approval. You may add a reason.`,
+      placeholder:  'Reason (optional)',
+      confirmLabel: 'Send request',
+    })
+    if (reason === null) return // cancelled
+    try {
+      await deleteRequestsApi.create({ entity_type: 'dropout', entity_id: row.id, reason: reason || null })
+      toast.success('Delete request sent — waiting for admin approval')
+      await reloadPending()
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || 'Failed to send delete request')
+    }
+  }
+
   const isEditable = (row: DropoutDTO) => {
-    // ADMIN has data-correction privilege — can edit any row at any time.
-    // Audit log captures the mutation so the trail is preserved.
     if (user.role === 'ADMIN') return true
-    if (row.entered_by !== user.id) return false
-    const ageMs = Date.now() - new Date(row.created_at).getTime()
-    return ageMs <= SAME_DAY_WINDOW_MS
+    // Clinician can act on entries where they are the clinician on the record
+    // (covers imports and entries made by front desk on their behalf),
+    // OR entries they personally submitted.
+    if (user.role === 'CLINICIAN') return row.clinician_id === user.id || row.entered_by === user.id
+    return row.entered_by === user.id
   }
 
   // ADMINs are blocked from creating entries (backend enforces). Show the
@@ -379,8 +543,11 @@ export default function DropoutEntryPage() {
   return (
     <AppShell title="Daily Patient Dropout Tracking">
       <div style={{ padding: '20px 28px' }}>
+        {isClinician && (
+          <SubTabs active={activeTab} total={total} onChange={setActiveTab} />
+        )}
         {/* Form card — hidden for ADMINs unless they're editing an existing row */}
-        {showCreateForm && (
+        {(!isClinician || activeTab === 'encode') && showCreateForm && (
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           padding: 18, marginBottom: 20,
@@ -389,7 +556,15 @@ export default function DropoutEntryPage() {
             fontSize: 14, fontWeight: 600, color: TEXT, marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            <span>{editingId ? 'Editing entry' : draftId ? 'Resuming saved draft' : 'New dropout entry'}</span>
+            <span>
+              {editingId && !isAdmin
+                ? 'Editing entry — changes will be sent for admin approval'
+                : editingId
+                  ? 'Editing entry'
+                  : draftId
+                    ? 'Resuming saved draft'
+                    : 'New dropout entry'}
+            </span>
             {(editingId || draftId) && (
               <button onClick={cancelEdit} style={smallBtnStyle}>
                 {editingId ? 'Cancel edit' : 'Clear'}
@@ -528,14 +703,51 @@ export default function DropoutEntryPage() {
               </button>
             )}
             <button onClick={onSubmit} disabled={saving} style={primaryBtnStyle}>
-              {saving ? 'Saving…' : editingId ? 'Update entry' : 'Add entry'}
+              {saving
+                ? 'Saving…'
+                : editingId && !isAdmin
+                  ? 'Submit for approval'
+                  : editingId
+                    ? 'Update entry'
+                    : 'Add entry'}
             </button>
           </div>
         </div>
         )}
 
+        {/* Rejected edit notifications */}
+        {(!isClinician || activeTab === 'entries') && visibleRejections.map(r => (
+          <div key={r.id} style={{
+            background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 10,
+            padding: '12px 16px', marginBottom: 12,
+            display: 'flex', alignItems: 'flex-start', gap: 12,
+          }}>
+            <span style={{ fontSize: 18, lineHeight: 1, marginTop: 1 }}>⚠️</span>
+            <div style={{ flex: 1, fontSize: 13 }}>
+              <strong style={{ color: '#92400e' }}>Edit request rejected</strong>
+              <span style={{ color: '#78350f', marginLeft: 8 }}>
+                Patient: {r.patient_name || '—'} · {r.entry_date || '—'}
+              </span>
+              <div style={{ color: '#92400e', marginTop: 4 }}>
+                <strong>Admin reason:</strong> {r.rejection_reason || 'No reason provided'}
+              </div>
+              <div style={{ color: '#78350f', fontSize: 12, marginTop: 2 }}>
+                Your edit reason: {r.reason}
+              </div>
+            </div>
+            <button
+              onClick={() => dismissRejected(r.id)}
+              title="Dismiss"
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: '#92400e', fontSize: 18, lineHeight: 1, padding: 2, flexShrink: 0,
+              }}
+            >×</button>
+          </div>
+        ))}
+
         {/* Saved drafts — this user's own, resume anytime (even after re-login) */}
-        {!isAdmin && (
+        {(!isClinician || activeTab === 'encode') && !isAdmin && (
           <DraftsPanel
             drafts={drafts}
             onResume={resumeDraft}
@@ -544,7 +756,77 @@ export default function DropoutEntryPage() {
           />
         )}
 
+        {/* Filters */}
+        {(!isClinician || activeTab === 'entries') && (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Search</span>
+            <div style={{ position: 'relative' }}>
+              <input
+                type="text"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                placeholder="Patient name or notes…"
+                style={{ ...inputStyle, paddingRight: searchInput ? 26 : 12, minWidth: 220 }}
+              />
+              {searchInput && (
+                <button onClick={() => setSearchInput('')} title="Clear search" style={{
+                  position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: '#9ca3af', fontSize: 14, padding: 2,
+                }}>×</button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Date range</span>
+            <DateRangePicker
+              value={{ from: dateFrom, to: dateTo }}
+              onChange={r => { setDateFrom(r.from); setDateTo(r.to) }}
+              maxRangeDays={366}
+            />
+          </div>
+          {isFrontDeskGlobal && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Clinician</span>
+              <select value={clinicianFilter} onChange={e => setClinicianFilter(e.target.value)} style={inputStyle}>
+                <option value="">All Clinicians</option>
+                {clinicians.map(c => <option key={c.id} value={c.id}>{c.full_name || c.email}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Status</span>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as DropoutStatus | '')} style={inputStyle}>
+              <option value="">All</option>
+              {DROPOUT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Reason</span>
+            <select value={reasonFilter} onChange={e => setReasonFilter(e.target.value as DropoutReason | '')} style={inputStyle}>
+              <option value="">All</option>
+              {DROPOUT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+        </div>
+        )}
+
+        {/* Summary cards */}
+        {(!isClinician || activeTab === 'entries') && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
+          marginBottom: 16,
+        }}>
+          <SummaryCard label="Total entries"         value={summary.total} highlight />
+          <SummaryCard label="Cancelled (no rebook)" value={summary.byStatus['Cancelled - not rescheduled'] ?? 0} />
+          <SummaryCard label="No future bookings"    value={summary.byStatus['No Future Bookings'] ?? 0} />
+          <SummaryCard label="Re-scheduled"          value={summary.byStatus['Re-scheduled'] ?? 0} />
+        </div>
+        )}
+
         {/* Table */}
+        {(!isClinician || activeTab === 'entries') && (
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           overflow: 'hidden',
@@ -565,34 +847,11 @@ export default function DropoutEntryPage() {
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={e => setSearchInput(e.target.value)}
-                  placeholder="Search patient or notes…"
-                  style={{
-                    ...inputStyle, paddingRight: searchInput ? 26 : 12,
-                    width: 260, fontSize: 12,
-                  }}
-                />
-                {searchInput && (
-                  <button
-                    onClick={() => setSearchInput('')}
-                    title="Clear search"
-                    style={{
-                      position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
-                      background: 'transparent', border: 'none', cursor: 'pointer',
-                      color: '#9ca3af', fontSize: 14, padding: 2,
-                    }}
-                  >×</button>
-                )}
-              </div>
               <button
                 onClick={onExport}
                 disabled={exporting || total === 0}
                 style={smallBtnStyle}
-                title="Download all your entries as Excel"
+                title="Download filtered entries as Excel"
               >
                 {exporting ? 'Exporting…' : `Download Excel`}
               </button>
@@ -636,9 +895,23 @@ export default function DropoutEntryPage() {
                       <Td><span style={{ color: TEXT_SOFT }}>{r.notes || <Dim>—</Dim>}</span></Td>
                       <Td align="right">
                         {isEditable(r) ? (
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                            <button onClick={() => startEdit(r)} style={smallBtnStyle}>Edit</button>
-                            <button onClick={() => onDelete(r)} style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}>Delete</button>
+                          <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            {isAdmin || !pendingEdits.has(r.id) ? (
+                              <ActionBtn
+                                label="Edit"
+                                variant={isAdmin ? 'primary' : 'outline'}
+                                onClick={() => startEdit(r)}
+                              />
+                            ) : (
+                              <StatusChip label="Edit pending" color="blue" title="Your edit is waiting for admin approval" />
+                            )}
+                            {isAdmin ? (
+                              <ActionBtn label="Delete" variant="danger" onClick={() => onDelete(r)} />
+                            ) : pendingDeletes.has(r.id) ? (
+                              <StatusChip label="Delete requested" color="amber" title="Waiting for admin approval" />
+                            ) : (
+                              <ActionBtn label="Request delete" variant="danger-ghost" onClick={() => onRequestDelete(r)} />
+                            )}
                           </div>
                         ) : <Dim>—</Dim>}
                       </Td>
@@ -655,12 +928,111 @@ export default function DropoutEntryPage() {
               limit={limit}
               offset={offset}
               onChange={setOffset}
-              onLimitChange={(n) => { setLimit(n); setOffset(0) }}
+              onLimitChange={setLimit}
             />
           )}
         </div>
+        )}
       </div>
+
+      {showDraftBlocker && (
+        <DraftBlockerModal
+          drafts={drafts}
+          onResume={(d) => { resumeDraft(d); setShowDraftBlocker(false) }}
+          onClose={() => setShowDraftBlocker(false)}
+        />
+      )}
     </AppShell>
+  )
+}
+
+function SummaryCard({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div style={{
+      background: highlight ? '#f0faf7' : '#fff',
+      border: `1px solid ${highlight ? '#cdebde' : BORDER}`,
+      borderRadius: 10, padding: '14px 16px',
+    }}>
+      <div style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500, letterSpacing: '0.04em' }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: highlight ? TEAL : TEXT, marginTop: 4 }}>{value}</div>
+    </div>
+  )
+}
+
+function ActionBtn({
+  label, variant, onClick,
+}: {
+  label:   string
+  variant: 'primary' | 'outline' | 'danger' | 'danger-ghost'
+  onClick: () => void
+}) {
+  const [hov, setHov] = React.useState(false)
+  const base: React.CSSProperties = {
+    border: 'none', borderRadius: 6, padding: '4px 11px',
+    fontSize: 12, fontWeight: 600, cursor: 'pointer',
+    fontFamily: "'DM Sans', sans-serif", whiteSpace: 'nowrap',
+    transition: 'background 0.13s, color 0.13s, border-color 0.13s',
+    display: 'inline-flex', alignItems: 'center',
+  }
+  const styles: Record<string, React.CSSProperties> = {
+    primary:        { ...base, background: hov ? '#0a5a45' : TEAL,  color: '#fff',   border: 'none' },
+    outline:        { ...base, background: hov ? '#f0faf7' : '#fff', color: TEAL,     border: `1px solid ${hov ? TEAL : '#a7d9c8'}` },
+    danger:         { ...base, background: hov ? '#991b1b' : DANGER, color: '#fff',   border: 'none' },
+    'danger-ghost': { ...base, background: hov ? '#fef2f2' : 'transparent', color: DANGER, border: `1px solid ${hov ? DANGER : '#fca5a5'}` },
+  }
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={styles[variant]}
+    >{label}</button>
+  )
+}
+
+function StatusChip({ label, color, title }: { label: string; color: 'blue' | 'amber'; title?: string }) {
+  const c = color === 'blue'
+    ? { bg: '#eff6ff', fg: '#1d4ed8', bd: '#bfdbfe' }
+    : { bg: '#fffbeb', fg: '#92400e', bd: '#fde68a' }
+  return (
+    <span title={title} style={{
+      background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
+      borderRadius: 6, padding: '4px 10px',
+      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+      fontFamily: "'DM Sans', sans-serif",
+    }}>{label}</span>
+  )
+}
+
+function SubTabs({
+  active, total, onChange,
+}: { active: 'encode' | 'entries'; total: number; onChange: (t: 'encode' | 'entries') => void }) {
+  return (
+    <div style={{
+      display: 'flex', gap: 0, marginBottom: 16,
+      borderBottom: '2px solid #e5e7eb',
+    }}>
+      {(['encode', 'entries'] as const).map(t => {
+        const label = t === 'encode' ? 'Encode' : `My Entries (${total.toLocaleString()})`
+        const isActive = active === t
+        return (
+          <button
+            key={t}
+            onClick={() => onChange(t)}
+            style={{
+              background: 'transparent', border: 'none',
+              borderBottom: isActive ? '2px solid #0f6e56' : '2px solid transparent',
+              marginBottom: -2,
+              padding: '8px 18px',
+              fontSize: 14, fontWeight: isActive ? 700 : 500,
+              color: isActive ? '#0f6e56' : '#6b7280',
+              cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+          >{label}</button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -789,4 +1161,14 @@ const draftBtnStyle: React.CSSProperties = {
 }
 const disabledBtnStyle: React.CSSProperties = {
   background: '#f3f4f6', color: TEXT_SOFT, borderColor: BORDER, cursor: 'not-allowed',
+}
+// Shown in place of the delete button once a delete request is pending.
+const pendingBadgeStyle: React.CSSProperties = {
+  background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a',
+  borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap',
+}
+// Shown in place of the edit button once an edit request is pending.
+const pendingEditBadgeStyle: React.CSSProperties = {
+  background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe',
+  borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap',
 }

@@ -5,6 +5,7 @@ import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import { promptDialog } from '../../store/prompt.store'
 import AppShell from '../shared/AppShell'
+import { useNavStore } from '../../store/nav.store'
 
 const TEAL      = '#0f6e56'
 const TEAL_DARK = '#0a5040'
@@ -33,6 +34,7 @@ const EMPTY_FORM: FormState = {
 }
 
 export default function UserManagementPage() {
+  const { navigate } = useNavStore()
   const [users, setUsers]       = useState<User[]>([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState('')
@@ -201,7 +203,21 @@ export default function UserManagementPage() {
               <tbody>
                 {users.map(u => (
                   <tr key={u.id} style={{ borderTop: `1px solid ${BORDER}` }}>
-                    <Td>{u.full_name || <span style={{ color: '#9ca3af' }}>—</span>}</Td>
+                    <Td>
+                      {u.role === 'CLINICIAN' ? (
+                        <button
+                          onClick={() => navigate('admin-clinician-profile', { clinicianId: u.id })}
+                          style={{
+                            background: 'none', border: 'none', padding: 0,
+                            color: TEAL, fontWeight: 600, fontSize: 13,
+                            cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+                            textDecoration: 'underline', textUnderlineOffset: 3,
+                          }}
+                        >{u.full_name || <span style={{ color: '#9ca3af' }}>—</span>}</button>
+                      ) : (
+                        u.full_name || <span style={{ color: '#9ca3af' }}>—</span>
+                      )}
+                    </Td>
                     <Td><span style={{ color: TEXT_SOFT }}>{u.email}</span></Td>
                     <Td><Pill text={ROLE_LABEL[u.role]} /></Td>
                     <Td>{u.clinic_id ? CLINIC_LABEL[u.clinic_id] : <span style={{ color: '#9ca3af' }}>—</span>}</Td>

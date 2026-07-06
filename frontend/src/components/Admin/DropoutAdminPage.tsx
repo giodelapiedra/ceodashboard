@@ -7,6 +7,7 @@ import {
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePaginationParams } from '../../hooks/usePaginationParams'
 import { exportDropoutsXlsx } from '../../lib/exportDropoutsXlsx'
 import { toast } from '../../store/toast.store'
 import DateRangePicker from '../shared/DateRangePicker'
@@ -47,13 +48,10 @@ export default function DropoutAdminPage() {
   const [searchInput,  setSearchInput]  = useState('')
   const search = useDebouncedValue(searchInput.trim(), 300)
 
-  const [limit,  setLimit]  = useState(50)
-  const [offset, setOffset] = useState(0)
+  const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
   const [exporting, setExporting] = useState(false)
 
-  // Reset to page 1 whenever filters change. Tracking the dependency array
-  // separately keeps the load() effect simple.
-  useEffect(() => { setOffset(0) }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, limit])
+  useEffect(() => { resetPage() }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, resetPage])
 
   const filterParams = {
     clinic_id: tab === 'overall' ? undefined : tab,
@@ -273,7 +271,7 @@ export default function DropoutAdminPage() {
               limit={limit}
               offset={offset}
               onChange={setOffset}
-              onLimitChange={(n) => { setLimit(n); setOffset(0) }}
+              onLimitChange={setLimit}
             />
           )}
         </div>

@@ -4,6 +4,7 @@ import { ROLE_LABEL } from '../../types'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePaginationParams } from '../../hooks/usePaginationParams'
 import DateRangePicker from '../shared/DateRangePicker'
 
 const TEAL      = '#0f6e56'
@@ -56,10 +57,9 @@ export default function AuditLogPage() {
 
   const [actionsList, setActionsList] = useState<string[]>([])
 
-  const [limit,  setLimit]  = useState(50)
-  const [offset, setOffset] = useState(0)
+  const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
 
-  useEffect(() => { setOffset(0) }, [dateFrom, dateTo, actionPrefix, actionExact, userId, limit])
+  useEffect(() => { resetPage() }, [dateFrom, dateTo, actionPrefix, actionExact, userId, resetPage])
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -200,7 +200,7 @@ export default function AuditLogPage() {
               limit={limit}
               offset={offset}
               onChange={setOffset}
-              onLimitChange={(n) => { setLimit(n); setOffset(0) }}
+              onLimitChange={setLimit}
             />
           )}
         </div>

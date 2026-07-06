@@ -19,12 +19,6 @@ export interface PagedCaseAcceptance {
   };
 }
 
-const SAME_DAY_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-function withinSameDayWindow(createdAt: Date): boolean {
-  return Date.now() - createdAt.getTime() <= SAME_DAY_EDIT_WINDOW_MS;
-}
-
 export const caseAcceptanceService = {
   async list(scope: RequestScope, filters: ListFilters): Promise<PagedCaseAcceptance> {
     const limit  = Math.min(Math.max(filters.limit ?? PAGE_LIMIT_DEFAULT, 1), PAGE_LIMIT_MAX);
@@ -145,16 +139,12 @@ export const caseAcceptanceService = {
     const existing = await caseAcceptanceRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Case acceptance ${id} not found`);
 
-    // ADMIN can edit any entry at any time (data-correction privilege). Every
-    // change is captured in audit_log so the trail is preserved. All other
-    // roles are restricted to their own entries within the 24h same-day window.
+    // Non-admin users must go through the edit-request approval flow.
+    // ADMIN edits entries directly.
     if (scope.role !== 'ADMIN') {
-      if (existing.entered_by !== scope.userId) {
-        throw Errors.forbidden('You can only edit your own case acceptance entries');
-      }
-      if (!withinSameDayWindow(existing.created_at)) {
-        throw Errors.forbidden('Edit window has passed (24h since creation)');
-      }
+      throw Errors.forbidden(
+        'Your edits need admin approval — submit an edit request (POST /api/edit-requests) instead'
+      );
     }
 
     if (patch.clinician_id) {
@@ -175,14 +165,7 @@ export const caseAcceptanceService = {
       throw Errors.validation('Booked cannot exceed case recommendations');
     }
 
-    // Receptionist accounts cannot rewrite their stamped front_staff_name.
-    const isReceptionist =
-      scope.role === 'FRONT_DESK' || scope.role === 'FRONT_DESK_GLOBAL';
-    const safePatch = isReceptionist
-      ? { ...patch, front_staff_name: undefined }
-      : patch;
-
-    await caseAcceptanceRepository.update(id, safePatch, scope.userId);
+    await caseAcceptanceRepository.update(id, patch, scope.userId);
     return this.get(scope, id);
   },
 
@@ -190,13 +173,10 @@ export const caseAcceptanceService = {
     const existing = await caseAcceptanceRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Case acceptance ${id} not found`);
 
+    // Only ADMIN deletes directly. Clinician / front-desk must file a delete
+    // request (POST /api/delete-requests) which an ADMIN approves.
     if (scope.role !== 'ADMIN') {
-      if (existing.entered_by !== scope.userId) {
-        throw Errors.forbidden('You can only delete your own case acceptance entries');
-      }
-      if (!withinSameDayWindow(existing.created_at)) {
-        throw Errors.forbidden('Delete window has passed (24h since creation)');
-      }
+      throw Errors.forbidden('Deletion needs admin approval — submit a delete request instead');
     }
     await caseAcceptanceRepository.delete(id);
   },

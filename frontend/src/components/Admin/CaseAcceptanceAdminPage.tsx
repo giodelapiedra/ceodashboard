@@ -5,6 +5,7 @@ import { usersApi } from '../../api/users.api'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePaginationParams } from '../../hooks/usePaginationParams'
 import DateRangePicker from '../shared/DateRangePicker'
 import { toast } from '../../store/toast.store'
 
@@ -45,8 +46,7 @@ export default function CaseAcceptanceAdminPage() {
   const [searchInput, setSearchInput] = useState('')
   const search = useDebouncedValue(searchInput.trim(), 300)
 
-  const [limit,  setLimit]  = useState(50)
-  const [offset, setOffset] = useState(0)
+  const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
   const [exporting, setExporting] = useState(false)
   const [clinicians, setClinicians] = useState<User[]>([])
   const [clinicianFilter, setClinicianFilter] = useState('')
@@ -55,7 +55,7 @@ export default function CaseAcceptanceAdminPage() {
     usersApi.staff('CLINICIAN').then(setClinicians).catch(() => {})
   }, [])
 
-  useEffect(() => { setOffset(0) }, [tab, dateFrom, dateTo, tpFilter, search, limit, clinicianFilter])
+  useEffect(() => { resetPage() }, [tab, dateFrom, dateTo, tpFilter, search, clinicianFilter, resetPage])
 
   const filterParams = {
     clinic_id:    tab === 'overall' ? undefined : tab,
@@ -299,7 +299,7 @@ export default function CaseAcceptanceAdminPage() {
               limit={limit}
               offset={offset}
               onChange={setOffset}
-              onLimitChange={(n) => { setLimit(n); setOffset(0) }}
+              onLimitChange={setLimit}
             />
           )}
         </div>

@@ -1,24 +1,59 @@
-import { create } from 'zustand';
+import { useNavigate, useLocation } from 'react-router-dom'
 
 export type AppPage =
-  | 'dashboard'                // ADMIN: existing Nookal CEO dashboard (table view)
-  | 'admin-ceo-analytics'      // ADMIN: executive analytics view of Nookal data
-  | 'admin-users'              // ADMIN: user management
-  | 'admin-dropouts'           // ADMIN: consolidated dropout view
-  | 'admin-dropout-analytics'  // ADMIN: dropout trend + breakdowns
-  | 'admin-case-acceptance'    // ADMIN: consolidated case acceptance view
-  | 'admin-activity-log'       // ADMIN: audit log viewer
-  | 'dropout-entry'            // CLINICIAN / FRONT_DESK: dropout input form
-  | 'case-acceptance-entry'    // CLINICIAN / FRONT_DESK: case acceptance input form
-  | 'drafts'                   // CLINICIAN / FRONT_DESK: all their saved drafts
-  | 'ad-spend-entry';          // ADSPEND: ad spend input form (only page this role sees)
+  | 'dashboard'
+  | 'admin-ceo-analytics'
+  | 'admin-users'
+  | 'admin-dropouts'
+  | 'admin-dropout-analytics'
+  | 'admin-case-acceptance'
+  | 'admin-delete-requests'
+  | 'admin-edit-requests'
+  | 'admin-activity-log'
+  | 'admin-clinician-profile'
+  | 'dropout-entry'
+  | 'case-acceptance-entry'
+  | 'drafts'
+  | 'ad-spend-entry'
+  | 'clinician-home'
 
-interface NavState {
-  page: AppPage;
-  navigate: (p: AppPage) => void;
+export const PAGE_PATH: Record<AppPage, string> = {
+  'dashboard':                 '/',
+  'admin-ceo-analytics':       '/ceo-analytics',
+  'admin-users':               '/admin/users',
+  'admin-dropouts':            '/admin/dropouts',
+  'admin-dropout-analytics':   '/admin/dropout-analytics',
+  'admin-case-acceptance':     '/admin/case-acceptance',
+  'admin-delete-requests':     '/admin/delete-requests',
+  'admin-edit-requests':       '/admin/edit-requests',
+  'admin-activity-log':        '/admin/activity-log',
+  'admin-clinician-profile':   '/admin/clinician-profile',
+  'dropout-entry':             '/dropout-entry',
+  'case-acceptance-entry':     '/case-acceptance-entry',
+  'drafts':                    '/drafts',
+  'ad-spend-entry':            '/ad-spend',
+  'clinician-home':            '/clinician-home',
 }
 
-export const useNavStore = create<NavState>((set) => ({
-  page: 'dashboard',
-  navigate: (page) => set({ page }),
-}));
+const PATH_PAGE: Record<string, AppPage> = Object.fromEntries(
+  Object.entries(PAGE_PATH).map(([page, path]) => [path, page as AppPage])
+)
+
+export function useNavStore() {
+  const rrNavigate = useNavigate()
+  const { pathname } = useLocation()
+
+  const page: AppPage = PATH_PAGE[pathname] ?? 'dashboard'
+
+  return {
+    page,
+    navigate: (p: AppPage, opts?: { clinicianId?: string }) => {
+      const base = PAGE_PATH[p]
+      if (opts?.clinicianId) {
+        rrNavigate(`${base}?clinician_id=${encodeURIComponent(opts.clinicianId)}`)
+      } else {
+        rrNavigate(base)
+      }
+    },
+  }
+}

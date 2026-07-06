@@ -17,12 +17,6 @@ export interface PagedDropouts {
   };
 }
 
-const SAME_DAY_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-function withinSameDayWindow(createdAt: Date): boolean {
-  return Date.now() - createdAt.getTime() <= SAME_DAY_EDIT_WINDOW_MS;
-}
-
 export const dropoutService = {
   async list(scope: RequestScope, filters: ListFilters): Promise<PagedDropouts> {
     const limit  = Math.min(Math.max(filters.limit ?? PAGE_LIMIT_DEFAULT, 1), PAGE_LIMIT_MAX);
@@ -124,14 +118,12 @@ export const dropoutService = {
     const existing = await dropoutRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Dropout ${id} not found`);
 
-    // ADMIN can edit any entry at any time (data-correction privilege).
-    // Every change is captured in audit_log so the trail is preserved.
+    // ADMIN can edit any entry. Clinician / front-desk can edit their OWN
+    // entries at any time (no 24h window) — they may need to correct data
+    // days later. Every change is captured in audit_log.
     if (scope.role !== 'ADMIN') {
       if (existing.entered_by !== scope.userId) {
         throw Errors.forbidden('You can only edit your own dropout entries');
-      }
-      if (!withinSameDayWindow(existing.created_at)) {
-        throw Errors.forbidden('Edit window has passed (24h since creation)');
       }
     }
 
@@ -161,13 +153,10 @@ export const dropoutService = {
     const existing = await dropoutRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Dropout ${id} not found`);
 
+    // Only ADMIN deletes directly. Clinician / front-desk must file a delete
+    // request (POST /api/delete-requests) which an ADMIN approves.
     if (scope.role !== 'ADMIN') {
-      if (existing.entered_by !== scope.userId) {
-        throw Errors.forbidden('You can only delete your own dropout entries');
-      }
-      if (!withinSameDayWindow(existing.created_at)) {
-        throw Errors.forbidden('Delete window has passed (24h since creation)');
-      }
+      throw Errors.forbidden('Deletion needs admin approval — submit a delete request instead');
     }
     await dropoutRepository.delete(id);
   },

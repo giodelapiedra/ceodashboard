@@ -58,23 +58,24 @@ export interface RevenueReport {
 
 // ── helpers ───────────────────────────────────────────────────────
 
-const MONTH_NUM: Record<string, number> = {
-  Jan:1, Feb:2, Mar:3, Apr:4, May:5, Jun:6, Jul:7, Aug:8, Sep:9, Oct:10, Nov:11, Dec:12,
-};
-const pad2 = (n: number) => String(n).padStart(2, '0');
-
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Nookal returns invoice/entry dates as JS `Date.toString()` strings, e.g.
+ * "Sat Jun 27 2026 02:30:06 GMT+1000 (Australian Eastern Standard Time)".
+ * Convert to UTC calendar day (not the Sydney-local day embedded in the
+ * string) — verified against Nookal's own Reports UI, which buckets by
+ * UTC day. See upfront-revenue.service.ts for the full writeup.
+ */
 function nookalDayISO(s: string | null | undefined): string | null {
   if (!s) return null;
-  const m = s.match(/^\w{3}\s+(\w{3})\s+(\d{2})\s+(\d{4})/);
-  if (!m) return null;
-  const mon = MONTH_NUM[m[1]];
-  return mon ? `${m[3]}-${pad2(mon)}-${m[2]}` : null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
 }
 
 function num(v: unknown): number {
