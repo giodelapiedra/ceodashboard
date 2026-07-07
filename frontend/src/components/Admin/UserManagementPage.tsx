@@ -132,7 +132,7 @@ export default function UserManagementPage() {
 
   return (
     <AppShell title="User Management">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {/* Toolbar */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
@@ -189,7 +189,8 @@ export default function UserManagementPage() {
           ) : users.length === 0 ? (
             <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>No users found.</div>
           ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 760 }}>
               <thead>
                 <tr style={{ background: '#f9fafb' }}>
                   <Th>Name</Th>
@@ -238,6 +239,7 @@ export default function UserManagementPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -266,7 +268,7 @@ function CreateForm({
       <div style={{ fontSize: 14, fontWeight: 600, color: TEXT, marginBottom: 12 }}>
         New user
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
+      <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
         <Field label="Full name">
           <input value={value.full_name} onChange={e => set('full_name', e.target.value)} style={inputStyle} placeholder="e.g. Caitlin Smith" />
         </Field>

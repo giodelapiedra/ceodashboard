@@ -24,6 +24,7 @@ export default function LoginPage() {
       minHeight: '100vh', background: '#f0f2f5',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontFamily: "'DM Sans', sans-serif",
+      padding: 16,
     }}>
       <style>{`
         @keyframes fadeUp { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }

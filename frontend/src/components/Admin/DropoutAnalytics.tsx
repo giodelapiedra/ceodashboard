@@ -101,7 +101,7 @@ export default function DropoutAnalytics({ summary, dateFrom, dateTo, tab }: Pro
         </div>
       </div>
 
-      <div style={{
+      <div className="pw-grid" style={{
         display: 'grid',
         gridTemplateColumns: '1.6fr 1fr',
         gap: 14,
@@ -255,7 +255,7 @@ function StatusDonut({
   total: number
 }) {
   return (
-    <div style={{
+    <div className="pw-grid" style={{
       display: 'grid',
       gridTemplateColumns: '170px 1fr',
       gap: 16,

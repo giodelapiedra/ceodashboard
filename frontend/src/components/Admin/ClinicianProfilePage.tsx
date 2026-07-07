@@ -300,7 +300,7 @@ export default function ClinicianProfilePage() {
   if (userError || !user) {
     return (
       <AppShell title="Clinician Profile">
-        <div style={{ padding: '20px 28px' }}>
+        <div className="pw-page" style={{ padding: '20px 28px' }}>
           <BackBtn onClick={() => navigate('admin-users')} />
           <div style={{
             background: '#fef2f2', border: '1px solid #fecaca', color: DANGER,
@@ -320,7 +320,7 @@ export default function ClinicianProfilePage() {
 
   return (
     <AppShell title="">
-      <div style={{ padding: '20px 28px', fontFamily: "'DM Sans', sans-serif" }}>
+      <div className="pw-page" style={{ padding: '20px 28px', fontFamily: "'DM Sans', sans-serif" }}>
         <BackBtn onClick={() => navigate('admin-users')} />
 
         {/* ── Profile card ─────────────────────────────────────────────── */}
@@ -378,12 +378,13 @@ export default function ClinicianProfilePage() {
               position: 'fixed', inset: 0, zIndex: 100,
               background: 'rgba(15,23,42,0.5)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 16,
             }}
             onClick={e => { if (e.target === e.currentTarget) setShowEdit(false) }}
           >
             <div style={{
               background: '#fff', borderRadius: 14, padding: '28px 28px 24px',
-              width: 420, boxShadow: '0 20px 50px rgba(15,23,42,0.2)',
+              width: '100%', maxWidth: 420, boxShadow: '0 20px 50px rgba(15,23,42,0.2)',
               fontFamily: "'DM Sans', sans-serif",
             }}>
               <div style={{ fontSize: 17, fontWeight: 700, color: TEXT, marginBottom: 20 }}>Edit profile</div>
@@ -490,7 +491,7 @@ export default function ClinicianProfilePage() {
                 </div>
 
                 {/* Summary cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+                <div className="pw-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
                   <SummaryCard label="Total entries"         value={ds?.total ?? 0}                                    highlight />
                   <SummaryCard label="Cancelled (no rebook)" value={ds?.byStatus['Cancelled - not rescheduled'] ?? 0} />
                   <SummaryCard label="No future bookings"    value={ds?.byStatus['No Future Bookings'] ?? 0} />
@@ -598,7 +599,7 @@ export default function ClinicianProfilePage() {
                 </div>
 
                 {/* Summary cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 16 }}>
+                <div className="pw-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 16 }}>
                   <SummaryCard label="Entries"  value={cs?.total ?? 0} highlight />
                   <SummaryCard
                     label="Recs"

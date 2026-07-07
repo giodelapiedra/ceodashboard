@@ -119,12 +119,12 @@ export default function DropoutAdminPage() {
 
   return (
     <AppShell title="Patient Dropout Tracking">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {/* Tabs */}
         <div style={{
-          display: 'flex', gap: 4, marginBottom: 16,
+          display: 'flex', gap: 4, marginBottom: 16, flexWrap: 'wrap',
           background: '#fff', padding: 4, borderRadius: 8,
-          border: `1px solid ${BORDER}`, width: 'fit-content',
+          border: `1px solid ${BORDER}`, width: 'fit-content', maxWidth: '100%',
         }}>
           {TABS.map(t => {
             const active = t.id === tab
@@ -203,7 +203,7 @@ export default function DropoutAdminPage() {
 
         {/* Summary strip — quick stats over the filtered set. Rich charts
             live on the dedicated Dropout Analytics page. */}
-        <div style={{
+        <div className="pw-grid-2" style={{
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
           marginBottom: 16,
         }}>

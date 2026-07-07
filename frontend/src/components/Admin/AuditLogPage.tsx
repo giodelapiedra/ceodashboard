@@ -92,7 +92,7 @@ export default function AuditLogPage() {
 
   return (
     <AppShell title="Activity Log">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {/* Filters */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,

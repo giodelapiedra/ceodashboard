@@ -197,7 +197,7 @@ function WeeklyInputForm({ onSaved }: { onSaved: () => void }) {
       {/* Channel grid */}
       <div style={{ border:`1px solid ${BORDER}`, borderRadius:8, overflow:'hidden', marginBottom:18 }}>
         {/* Header */}
-        <div style={{ display:'grid', gridTemplateColumns:'140px 1fr 120px', gap:8, padding:'8px 16px', background:'#f9fafb', borderBottom:`1px solid ${BORDER}` }}>
+        <div className="pw-adspend-row" style={{ display:'grid', gridTemplateColumns:'140px 1fr 120px', gap:8, padding:'8px 16px', background:'#f9fafb', borderBottom:`1px solid ${BORDER}` }}>
           <div style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>Channel</div>
           <div style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>Ad Spend $</div>
           <div style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em', textAlign:'right' }}>Preview</div>
@@ -210,7 +210,7 @@ function WeeklyInputForm({ onSaved }: { onSaved: () => void }) {
           const isGoogleSynced = c === 'Google' && googleSynced !== null
           const amtVal = isGoogleSynced ? googleSynced : parseFloat(amounts[c])
           return (
-            <div key={c} style={{
+            <div key={c} className="pw-adspend-row" style={{
               display:'grid', gridTemplateColumns:'140px 1fr 120px', gap:8,
               padding:'10px 16px', alignItems:'center',
               background: i % 2 === 0 ? '#fff' : '#fafbfc',
@@ -252,7 +252,7 @@ function WeeklyInputForm({ onSaved }: { onSaved: () => void }) {
         })}
 
         {/* Total row */}
-        <div style={{ display:'grid', gridTemplateColumns:'140px 1fr 120px', gap:8, padding:'12px 16px', background:'#f0faf7', borderTop:`2px solid ${TEAL}`, alignItems:'center' }}>
+        <div className="pw-adspend-row" style={{ display:'grid', gridTemplateColumns:'140px 1fr 120px', gap:8, padding:'12px 16px', background:'#f0faf7', borderTop:`2px solid ${TEAL}`, alignItems:'center' }}>
           <div style={{ fontSize:13, fontWeight:700, color:TEAL }}>TOTAL</div>
           <div />
           <div style={{ textAlign:'right', fontSize:16, fontWeight:700, fontFamily:"'DM Mono',monospace", color: previewTotal > 0 ? TEAL : '#d1d5db' }}>
@@ -544,7 +544,7 @@ export default function AdSpendEntryPage() {
 
   return (
     <AppShell title="Ad Spend">
-      <div style={{ padding:'20px 28px' }}>
+      <div className="pw-page" style={{ padding:'20px 28px' }}>
 
         {/* Ads sync — ADMIN only */}
         {isAdmin && (
@@ -612,7 +612,7 @@ export default function AdSpendEntryPage() {
                   <button onClick={cancelEdit} style={smallBtnStyle}>Cancel</button>
                 </div>
                 {editErr && <div style={{ background:'#fef2f2', border:'1px solid #fecaca', color:DANGER, borderRadius:8, padding:'10px 14px', fontSize:13, marginBottom:12 }}>{editErr}</div>}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+                <div className="pw-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
                   <Field label="Date">
                     <input type="date" value={editForm.spend_date}
                       onChange={e => setEditForm(f => ({ ...f, spend_date: e.target.value }))}
@@ -746,7 +746,7 @@ function SummaryCards({ summary }: { summary: AdSpendSummary | null }) {
     : []
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:16 }}>
+    <div className="pw-grid-2" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:16 }}>
       {/* Total Spend */}
       <div style={{ background:'#fff', border:`1px solid ${BORDER}`, borderRadius:10, padding:'14px 18px' }}>
         <div style={{ fontSize:11, color:TEXT_SOFT, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase' }}>Total Spend</div>

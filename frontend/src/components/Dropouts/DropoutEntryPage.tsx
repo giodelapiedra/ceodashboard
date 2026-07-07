@@ -591,7 +591,7 @@ export default function DropoutEntryPage() {
 
   return (
     <AppShell title="Daily Patient Dropout Tracking">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {isClinician && (
           <SubTabs active={activeTab} total={total} onChange={setActiveTab} />
         )}
@@ -628,7 +628,7 @@ export default function DropoutEntryPage() {
             }}>{error}</div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
             <Field label="Date">
               <input type="date" value={form.date_logged}
                 onChange={e => setForm({ ...form, date_logged: e.target.value })}
@@ -868,7 +868,7 @@ export default function DropoutEntryPage() {
 
         {/* Summary cards */}
         {(!isClinician || activeTab === 'entries') && (
-        <div style={{
+        <div className="pw-grid-2" style={{
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
           marginBottom: 16,
         }}>

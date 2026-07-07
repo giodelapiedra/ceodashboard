@@ -688,7 +688,7 @@ export default function DashboardPage() {
       )}
 
       {/* ── Table area ── */}
-      <div className="print-area" style={{ padding: '20px 28px', animation: data ? 'fadeIn 0.3s ease' : 'none' }}>
+      <div className="print-area pw-page" style={{ padding: '20px 28px', animation: data ? 'fadeIn 0.3s ease' : 'none' }}>
         {loading ? (
           <FetchProgress active={loading} clinicName={currentClinic?.name} />
         ) : !data ? (

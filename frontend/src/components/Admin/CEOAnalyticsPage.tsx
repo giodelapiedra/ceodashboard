@@ -106,7 +106,7 @@ export default function CEOAnalyticsPage() {
 
   return (
     <AppShell title="CEO Analytics">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {/* ── Controls ── */}
         <div style={{
           background: 'linear-gradient(180deg, #ffffff 0%, #fbfcfd 100%)',
@@ -233,7 +233,7 @@ function Analytics({ data, adSpend }: { data: DashboardData; adSpend: WeeklyRepo
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {/* ── Hero KPI strip ── */}
-      <div style={{
+      <div className="pw-grid-2" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(4, 1fr)',
         gap: 14,
@@ -270,7 +270,7 @@ function Analytics({ data, adSpend }: { data: DashboardData; adSpend: WeeklyRepo
       </div>
 
       {/* ── Revenue trend + mix ── */}
-      <div style={{
+      <div className="pw-grid" style={{
         display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: 14,
       }}>
         <Panel>
@@ -322,7 +322,7 @@ function Analytics({ data, adSpend }: { data: DashboardData; adSpend: WeeklyRepo
           title="Operational metrics"
           subtitle="Secondary KPIs for the month"
         />
-        <div style={{
+        <div className="pw-grid-2" style={{
           display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10,
         }}>
           <MiniStat label="No-shows"              value={m.noShows} />
@@ -531,7 +531,7 @@ function RevenueMixDonut({
   rows, total,
 }: { rows: { name: string; value: number; color: string }[]; total: number }) {
   return (
-    <div style={{
+    <div className="pw-grid" style={{
       display: 'grid', gridTemplateColumns: '170px 1fr', gap: 16, alignItems: 'center',
     }}>
       <div style={{
@@ -631,7 +631,7 @@ function PatientFlow({ monthly: m }: { monthly: MonthlyTotals }) {
   ]
 
   return (
-    <div style={{
+    <div className="pw-grid-2" style={{
       display: 'grid', gridTemplateColumns: 'repeat(5, 1fr) ',
       gap: 0, alignItems: 'stretch',
     }}>

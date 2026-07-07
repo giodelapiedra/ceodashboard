@@ -78,7 +78,7 @@ export default function DeleteRequestsPage() {
 
   return (
     <AppShell title="Delete Requests">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10, overflow: 'hidden',
         }}>

@@ -3,6 +3,7 @@ import axios from 'axios'
 import { useAuthStore } from '../../store/auth.store'
 import { useNavStore, AppPage } from '../../store/nav.store'
 import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId } from '../../types'
+import { useMediaBelow } from '../../hooks/useMediaBelow'
 
 const TEAL    = '#0f6e56'
 const HEADER  = '#1e2547'
@@ -70,9 +71,15 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
   const [openGroup, setOpenGroup]         = useState<string | null>(null)
   const [showChangePwd, setShowChangePwd] = useState(false)
 
+  // Below 900px the inline nav + user block can't fit — collapse to a burger.
+  const isMobile = useMediaBelow(900)
+  const [menuOpen, setMenuOpen] = useState(false)
+  useEffect(() => { if (!isMobile) setMenuOpen(false) }, [isMobile])
+
   if (!user) return <>{children}</>
 
   const items = NAV_TREE[user.role] ?? []
+  const go = (p: AppPage) => { setOpenGroup(null); setMenuOpen(false); navigate(p) }
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0f2f5', fontFamily: "'DM Sans', sans-serif" }}>
@@ -80,31 +87,32 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
         className="no-print"
         style={{
           background: HEADER, color: '#fff',
-          padding: '14px 28px',
+          padding: isMobile ? '12px 16px' : '14px 28px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
           position: 'relative',
           zIndex: 30,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 28, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
               width: 32, height: 32, background: TEAL, borderRadius: 8,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 12, letterSpacing: 1,
+              fontWeight: 700, fontSize: 12, letterSpacing: 1, flexShrink: 0,
             }}>PW</div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>PhysioWard</div>
+            <div style={{ fontWeight: 700, fontSize: 16, whiteSpace: 'nowrap' }}>PhysioWard</div>
           </div>
 
-          <nav style={{ display: 'flex', gap: 4 }}>
+          {!isMobile && (
+          <nav style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {items.map((item) => item.kind === 'link' ? (
               <NavLink
                 key={item.page}
                 page={item.page}
                 label={item.label}
                 active={page === item.page}
-                onClick={() => { setOpenGroup(null); navigate(item.page) }}
+                onClick={() => go(item.page)}
               />
             ) : (
               <NavGroup
@@ -115,7 +123,7 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
                 isOpen={openGroup === item.label}
                 onToggle={() => setOpenGroup(openGroup === item.label ? null : item.label)}
                 onClose={() => setOpenGroup(null)}
-                onNavigate={(p) => { setOpenGroup(null); navigate(p) }}
+                onNavigate={go}
               />
             ))}
             {user.role === 'CLINICIAN' && page !== 'clinician-home' && (
@@ -138,8 +146,22 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
               </button>
             )}
           </nav>
+          )}
         </div>
 
+        {isMobile ? (
+          <button
+            onClick={() => setMenuOpen(o => !o)}
+            aria-label="Menu"
+            aria-expanded={menuOpen}
+            style={{
+              background: menuOpen ? 'rgba(255,255,255,0.12)' : 'transparent',
+              border: '1px solid rgba(255,255,255,0.25)',
+              color: '#fff', borderRadius: 8, padding: '8px 12px',
+              fontSize: 18, lineHeight: 1, cursor: 'pointer',
+            }}
+          >{menuOpen ? '✕' : '☰'}</button>
+        ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>
@@ -173,7 +195,22 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
             Sign out
           </button>
         </div>
+        )}
       </header>
+
+      {isMobile && menuOpen && (
+        <MobileMenu
+          items={items}
+          currentPage={page}
+          userLine1={user.full_name || user.email}
+          userLine2={`${ROLE_LABEL[user.role]}${user.clinic_id ? ` · ${CLINIC_LABEL[user.clinic_id as ClinicId]}` : ''}`}
+          showHome={user.role === 'CLINICIAN' && page !== 'clinician-home'}
+          onNavigate={go}
+          onHome={() => { setMenuOpen(false); navigate('clinician-home') }}
+          onChangePwd={() => { setMenuOpen(false); setShowChangePwd(true) }}
+          onLogout={logout}
+        />
+      )}
 
       {showChangePwd && (
         <ChangePasswordModal
@@ -184,7 +221,7 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
       )}
 
       {withHeader && title && (
-        <div style={{ padding: '20px 28px 0' }}>
+        <div className="pw-page" style={{ padding: '20px 28px 0' }}>
           <h1 style={{
             margin: 0, fontSize: 22, fontWeight: 700, color: '#111827',
             letterSpacing: '-0.01em',
@@ -269,12 +306,13 @@ function ChangePasswordModal({ accessToken, onClose, onSuccess }: ChangePwdProps
         position: 'fixed', inset: 0, zIndex: 100,
         background: 'rgba(15, 23, 42, 0.55)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div style={{
         background: '#fff', borderRadius: 14, padding: '32px 32px 28px',
-        width: 380, boxShadow: '0 20px 50px rgba(15,23,42,0.18)',
+        width: '100%', maxWidth: 380, boxShadow: '0 20px 50px rgba(15,23,42,0.18)',
         fontFamily: "'DM Sans', sans-serif",
       }}>
         <h2 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 700, color: '#111827' }}>
@@ -365,6 +403,73 @@ function ChangePasswordModal({ accessToken, onClose, onSuccess }: ChangePwdProps
             </div>
           </form>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Mobile menu ────────────────────────────────────────────────────────
+
+function MobileMenu({
+  items, currentPage, userLine1, userLine2, showHome,
+  onNavigate, onHome, onChangePwd, onLogout,
+}: {
+  items:       NavItem[]
+  currentPage: AppPage
+  userLine1:   string
+  userLine2:   string
+  showHome:    boolean
+  onNavigate:  (p: AppPage) => void
+  onHome:      () => void
+  onChangePwd: () => void
+  onLogout:    () => void
+}) {
+  const itemBtn = (active: boolean): React.CSSProperties => ({
+    display: 'block', width: '100%', textAlign: 'left',
+    background: active ? '#f0faf7' : 'transparent',
+    color: active ? TEAL : '#111827',
+    border: 'none', borderRadius: 8,
+    padding: '12px 14px',           // generous tap target
+    fontSize: 15, fontWeight: active ? 600 : 500,
+    cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+  })
+  return (
+    <div
+      className="no-print"
+      style={{
+        background: '#fff', borderBottom: '1px solid #e5e7eb',
+        boxShadow: '0 12px 24px rgba(15,23,42,0.12)',
+        padding: '8px 10px 12px',
+        position: 'relative', zIndex: 29,
+      }}
+    >
+      {showHome && (
+        <button onClick={onHome} style={itemBtn(false)}>← Home</button>
+      )}
+      {items.map((item) => item.kind === 'link' ? (
+        <button key={item.page} onClick={() => onNavigate(item.page)} style={itemBtn(currentPage === item.page)}>
+          {item.label}
+        </button>
+      ) : (
+        <div key={item.label}>
+          <div style={{
+            padding: '12px 14px 4px', fontSize: 11, fontWeight: 700,
+            color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase',
+          }}>{item.label}</div>
+          {item.items.map((leaf) => (
+            <button key={leaf.page} onClick={() => onNavigate(leaf.page)} style={itemBtn(currentPage === leaf.page)}>
+              {leaf.label}
+            </button>
+          ))}
+        </div>
+      ))}
+      <div style={{ borderTop: '1px solid #eef0f3', margin: '10px 4px', paddingTop: 10 }}>
+        <div style={{ padding: '0 14px 10px' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{userLine1}</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>{userLine2}</div>
+        </div>
+        <button onClick={onChangePwd} style={itemBtn(false)}>Change password</button>
+        <button onClick={onLogout} style={{ ...itemBtn(false), color: '#b91c1c' }}>Sign out</button>
       </div>
     </div>
   )

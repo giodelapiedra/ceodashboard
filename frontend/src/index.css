@@ -1,0 +1,37 @@
+/* Global responsive baseline. Pages style themselves inline; the rules here
+   only cover what inline styles can't: box-sizing, viewport overflow, and
+   mobile overrides (the !important ones intentionally beat inline styles). */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  /* A single overflowing element must scroll inside itself, never widen the page. */
+  overflow-x: hidden;
+}
+
+img, svg, video { max-width: 100%; }
+
+@media (max-width: 640px) {
+  /* iOS Safari zooms the page when a focused input's font-size is < 16px.
+     Most inputs here are 13-14px — bump them on phones only. */
+  input, select, textarea { font-size: 16px !important; }
+
+  /* Opt-in helper: form/card grids collapse to one column on phones. */
+  .pw-grid { grid-template-columns: 1fr !important; }
+
+  /* Opt-in helper: two columns on phones (summary card walls). */
+  .pw-grid-2 { grid-template-columns: 1fr 1fr !important; }
+
+  /* Opt-in helper: page sections drop their wide desktop padding. */
+  .pw-page { padding-left: 12px !important; padding-right: 12px !important; }
+
+  /* Ad-spend channel rows (label / amount / subtotal) — narrower side columns. */
+  .pw-adspend-row { grid-template-columns: 88px 1fr 76px !important; gap: 6px !important; }
+}
+
+@media (max-width: 900px) {
+  /* Opt-in helper: filter/toolbar rows always wrap on small screens. */
+  .pw-wrap { flex-wrap: wrap !important; }
+}

@@ -594,7 +594,7 @@ export default function CaseAcceptanceEntryPage() {
 
   return (
     <AppShell title="Daily Case Recommendation & Acceptance Tracker">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {isClinician && (
           <SubTabs active={activeTab} total={total} onChange={setActiveTab} />
         )}
@@ -634,7 +634,7 @@ export default function CaseAcceptanceEntryPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* ── Row 1: Date / Clinic / Clinician ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               <Field label="Date">
                 <input type="date" value={form.date_logged}
                   onChange={e => setForm({ ...form, date_logged: e.target.value })}
@@ -674,7 +674,7 @@ export default function CaseAcceptanceEntryPage() {
             </div>
 
             {/* ── Row 2: Front staff / Patient name ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               {isReceptionist ? (
                 <Field label="Front of staff name (your login)">
                   <input
@@ -712,7 +712,7 @@ export default function CaseAcceptanceEntryPage() {
             </div>
 
             {/* ── Row 3: TP provided / Case recommendations / Appointments booked ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               <Field label="Treatment plan provided">
                 <TriSelect value={form.treatment_plan_provided}
                   onChange={v => setForm({ ...form, treatment_plan_provided: v })} />
@@ -732,7 +732,7 @@ export default function CaseAcceptanceEntryPage() {
             </div>
 
             {/* ── Row 4: Prepay offered / Prepay accepted ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               <Field label="Prepay offered">
                 <TriSelect value={form.prepay_offered}
                   onChange={v => setForm({ ...form, prepay_offered: v })} />
@@ -747,7 +747,7 @@ export default function CaseAcceptanceEntryPage() {
             </div>
 
             {/* ── Row 5: Transition notes / Notes ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
+            <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
               <Field label="Transition (TP explained / objections) *">
                 <textarea value={form.transition_notes}
                   onChange={e => setForm({ ...form, transition_notes: e.target.value })}
@@ -1137,7 +1137,7 @@ function SummaryCards({ summary }: { summary: CaseAcceptanceSummary | null }) {
     { label: 'Prepay accepted',  value: '—' },
   ]
   return (
-    <div style={{
+    <div className="pw-grid-2" style={{
       display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12,
       marginBottom: 16,
     }}>

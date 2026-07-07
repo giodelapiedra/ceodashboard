@@ -73,12 +73,12 @@ export default function DropoutAnalyticsPage() {
 
   return (
     <AppShell title="Dropout Analytics">
-      <div style={{ padding: '20px 28px' }}>
+      <div className="pw-page" style={{ padding: '20px 28px' }}>
         {/* Tabs */}
         <div style={{
           display: 'flex', gap: 4, marginBottom: 14,
           background: '#fff', padding: 4, borderRadius: 8,
-          border: `1px solid ${BORDER}`, width: 'fit-content',
+          border: `1px solid ${BORDER}`, width: 'fit-content', maxWidth: '100%', flexWrap: 'wrap',
         }}>
           {TABS.map((t) => {
             const active = t.id === tab
