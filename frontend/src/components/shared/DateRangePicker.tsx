@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DayPicker, DateRange } from 'react-day-picker'
 import 'react-day-picker/style.css'
 import { format, parseISO, startOfDay, subDays, startOfMonth, endOfMonth, subMonths, isValid } from 'date-fns'
@@ -52,7 +52,53 @@ const PRESETS: Preset[] = [
 
 export default function DateRangePicker({ value, onChange, maxRangeDays }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
+  const popRef  = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+
+  // Popover coordinates (position: fixed). Fixed positioning escapes any
+  // ancestor overflow:hidden card that would otherwise clip the calendar.
+  // null = not measured yet — popover renders invisible for that first frame.
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  // One month on narrow screens so the popover fits; two on desktop.
+  const [months, setMonths] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 760 ? 1 : 2)
+  useEffect(() => {
+    const onResize = () => setMonths(window.innerWidth < 760 ? 1 : 2)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  const narrow = months === 1
+
+  // Place the popover under the trigger, clamped to the viewport; flip above
+  // when there isn't enough room below. Re-runs on scroll/resize/content growth.
+  const place = () => {
+    const t = wrapRef.current?.getBoundingClientRect()
+    const p = popRef.current
+    if (!t || !p) return
+    const margin = 8
+    const left = Math.max(margin, Math.min(t.left, window.innerWidth - p.offsetWidth - margin))
+    const below = window.innerHeight - t.bottom - margin
+    const top = (p.offsetHeight + margin <= below || below >= t.top - margin)
+      ? t.bottom + margin
+      : Math.max(margin, t.top - p.offsetHeight - margin)
+    setPos({ top, left })
+  }
+
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return }
+    place()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    if (ro && popRef.current) ro.observe(popRef.current)
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, months])
 
   // Internal "draft" range while the popover is open. Only commits to onChange
   // when user clicks Apply.
@@ -151,37 +197,46 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
 
       {open && (
         <div
+          ref={popRef}
           role="dialog"
           aria-label="Choose date range"
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 8px)',
-            left: 0,
-            zIndex: 50,
+            position: 'fixed',
+            top: pos?.top ?? 0,
+            left: pos?.left ?? 0,
+            visibility: pos ? 'visible' : 'hidden',
+            zIndex: 1000,
             background: '#fff',
             border: `1px solid ${BORDER}`,
             borderRadius: 12,
             boxShadow: '0 12px 32px rgba(15, 23, 42, 0.16), 0 4px 8px rgba(15, 23, 42, 0.06)',
             display: 'grid',
-            gridTemplateColumns: '160px 1fr',
-            overflow: 'hidden',
+            gridTemplateColumns: narrow ? '1fr' : '160px 1fr',
+            overflow: 'hidden auto',
             animation: 'rangePickerFade 0.16s ease',
-            minWidth: 600,
+            minWidth: narrow ? 0 : 600,
+            maxWidth: 'calc(100vw - 16px)',
+            maxHeight: 'calc(100vh - 16px)',
           }}
         >
           <style>{rangePickerCss}</style>
 
-          {/* Preset rail */}
+          {/* Preset rail — vertical on desktop; wrapping row on narrow screens */}
           <div style={{
             background: '#fafbfc',
-            borderRight: `1px solid ${BORDER}`,
+            borderRight: narrow ? 'none' : `1px solid ${BORDER}`,
+            borderBottom: narrow ? `1px solid ${BORDER}` : 'none',
             padding: 10,
-            display: 'flex', flexDirection: 'column', gap: 2,
+            display: 'flex',
+            flexDirection: narrow ? 'row' : 'column',
+            flexWrap: narrow ? 'wrap' : 'nowrap',
+            gap: 2,
           }}>
             <div style={{
               fontSize: 9, fontWeight: 700, color: TEXT_MUTED,
               letterSpacing: '0.1em', textTransform: 'uppercase',
               padding: '6px 10px 8px',
+              ...(narrow ? { width: '100%' } : {}),
             }}>Quick ranges</div>
             {PRESETS.map((p) => {
               const built = p.build()
@@ -214,7 +269,7 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
           <div style={{ padding: 12 }}>
             <DayPicker
               mode="range"
-              numberOfMonths={2}
+              numberOfMonths={months}
               selected={draft}
               onSelect={(r) => { setDraft(r); setRangeError(null) }}
               showOutsideDays

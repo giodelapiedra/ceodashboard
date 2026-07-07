@@ -351,6 +351,13 @@ export default function DropoutEntryPage() {
     if (!form.status)                          return setError('Status is required')
     if (!form.reason)                          return setError('Reason is required')
 
+    // A cancellation date typed into the picker but never "+ Add"-ed would
+    // otherwise be silently dropped on save — merge it in here.
+    const cancelDates =
+      form.cancel_date_input && !form.appointment_cancelled_dates.includes(form.cancel_date_input)
+        ? [...form.appointment_cancelled_dates, form.cancel_date_input].sort()
+        : form.appointment_cancelled_dates
+
     // Non-admin editing an existing row → submit an edit request for admin approval.
     if (editingId && !isAdmin) {
       const reason = await promptDialog.ask({
@@ -380,9 +387,9 @@ export default function DropoutEntryPage() {
           patch.date_logged = form.date_logged
         // Array comparison — check if sorted lists differ
         const origDates = [...original.appointment_cancelled_dates].sort().join(',')
-        const newDates  = [...form.appointment_cancelled_dates].sort().join(',')
+        const newDates  = [...cancelDates].sort().join(',')
         if (newDates !== origDates)
-          patch.appointment_cancelled_dates = form.appointment_cancelled_dates
+          patch.appointment_cancelled_dates = cancelDates
         if (form.status && form.status !== original.status)
           patch.status = form.status
         if (form.reason && form.reason !== original.reason)
@@ -427,7 +434,7 @@ export default function DropoutEntryPage() {
           clinician_id:                form.clinician_id,
           ...(frontStaff !== undefined ? { front_staff_name: frontStaff } : {}),
           patient_name:                patientName,
-          appointment_cancelled_dates: form.appointment_cancelled_dates,
+          appointment_cancelled_dates: cancelDates,
           status:                      form.status as DropoutStatus,
           reason:                      form.reason as DropoutReason,
           notes:                       form.notes.trim() || null,
@@ -443,7 +450,7 @@ export default function DropoutEntryPage() {
           ...((isClinician || isFrontDeskGlobal) ? { clinic_id: form.clinic_id as ClinicId } : {}),
           ...(frontStaff !== undefined ? { front_staff_name: frontStaff } : {}),
           patient_name:                patientName,
-          appointment_cancelled_dates: form.appointment_cancelled_dates,
+          appointment_cancelled_dates: cancelDates,
           status:                      form.status as DropoutStatus,
           reason:                      form.reason as DropoutReason,
           notes:                       form.notes.trim() || null,
