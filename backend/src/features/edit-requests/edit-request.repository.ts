@@ -183,10 +183,30 @@ export const editRequestRepository = {
       `${SELECT_JOINED}
         WHERE er.requested_by = $1
           AND er.status = 'rejected'
+          AND er.requester_ack_at IS NULL
           AND er.reviewed_at > NOW() - INTERVAL '30 days'
         ORDER BY er.reviewed_at DESC`,
       [requesterId]
     );
     return rows.map(toDTO);
+  },
+
+  /** Requester dismissed the rejection banner — never show it again.
+   *  Acks EVERY rejected request for the same entity, since the UI collapses
+   *  them into one banner; acking only the newest would surface the older one. */
+  async ackRejectedByRequester(requesterId: string, id: string): Promise<boolean> {
+    const { rowCount } = await query(
+      `UPDATE edit_requests
+          SET requester_ack_at = NOW(), updated_at = NOW()
+        WHERE requested_by = $2
+          AND status = 'rejected'
+          AND requester_ack_at IS NULL
+          AND (entity_type, entity_id) IN (
+            SELECT entity_type, entity_id FROM edit_requests
+             WHERE id = $1 AND requested_by = $2
+          )`,
+      [id, requesterId]
+    );
+    return (rowCount ?? 0) > 0;
   },
 };

@@ -56,4 +56,8 @@ export const editRequestsApi = {
   /** Recently rejected requests for the current user — drives the notification banner. */
   myRejected: (): Promise<EditRequestDTO[]> =>
     api.get('/api/edit-requests/mine/rejected').then(r => r.data.data),
+
+  /** Dismiss a rejection banner permanently (server-side, survives any device/browser). */
+  ackRejected: (id: string): Promise<void> =>
+    api.post(`/api/edit-requests/${id}/ack`).then(() => {}),
 }

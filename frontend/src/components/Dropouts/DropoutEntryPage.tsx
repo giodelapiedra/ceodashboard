@@ -158,6 +158,9 @@ export default function DropoutEntryPage() {
     const next = new Set(dismissedIds).add(id)
     setDismissedIds(next)
     try { localStorage.setItem('pw:edit-rejected:dismissed', JSON.stringify([...next])) } catch { /* quota */ }
+    // Persist server-side too — localStorage alone brought the banner back on
+    // other devices / cleared storage for the whole 30-day window.
+    editRequestsApi.ackRejected(id).catch(() => { /* banner already hidden locally */ })
   }
   const visibleRejections = rejectedEdits.filter(r => !dismissedIds.has(r.id))
 

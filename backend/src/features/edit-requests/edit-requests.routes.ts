@@ -31,6 +31,14 @@ router.get('/mine/rejected', async (req: AuthRequest, res: Response, next: NextF
   } catch (err) { next(err); }
 });
 
+// POST /api/edit-requests/:id/ack — requester dismisses a rejection banner for good.
+router.post('/:id/ack', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    await editRequestService.ackRejected(req.scope!, req.params.id);
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
 // POST /api/edit-requests — submit a proposed edit with a reason.
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

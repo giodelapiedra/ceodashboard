@@ -154,4 +154,10 @@ export const editRequestService = {
   myRejected(scope: RequestScope) {
     return editRequestRepository.listRejectedByRequester(scope.userId);
   },
+
+  /** Caller dismisses a rejection banner — persisted so it stays gone on every device. */
+  async ackRejected(scope: RequestScope, id: string): Promise<void> {
+    const ok = await editRequestRepository.ackRejectedByRequester(scope.userId, id);
+    if (!ok) throw Errors.notFound(`Rejected edit request ${id} not found for this user`);
+  },
 };
