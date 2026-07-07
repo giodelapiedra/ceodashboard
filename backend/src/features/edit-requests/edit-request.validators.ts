@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { EDIT_ENTITY_TYPES, EditEntityType } from './edit-request.repository';
+import {
+  DROPOUT_STATUSES, DROPOUT_REASONS,
+  DropoutStatus, DropoutReason,
+} from '../../shared/roles';
 
 const entityTypeEnum = z.enum(
   [...EDIT_ENTITY_TYPES] as [EditEntityType, ...EditEntityType[]]
@@ -23,8 +27,10 @@ const patchSchema = z.object({
   appointment_cancelled_dates: z.array(
     z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
   ).optional(),
-  status: z.string().max(100).optional(),
-  reason: z.string().max(100).optional(),
+  // Must match the patient_dropouts CHECK whitelists — a free string here
+  // passes creation but then makes approve() fail forever on the constraint.
+  status: z.enum([...DROPOUT_STATUSES] as [DropoutStatus, ...DropoutStatus[]]).optional(),
+  reason: z.enum([...DROPOUT_REASONS]  as [DropoutReason, ...DropoutReason[]]).optional(),
 }).refine(obj => Object.keys(obj).length > 0, {
   message: 'Patch must contain at least one changed field',
 });

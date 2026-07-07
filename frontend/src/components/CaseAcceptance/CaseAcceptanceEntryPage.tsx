@@ -225,7 +225,12 @@ export default function CaseAcceptanceEntryPage() {
   // Original row being edited — used to compute the diff patch for edit requests.
   const editingRowRef = useRef<CaseAcceptanceDTO | null>(null)
 
+  // Guards against out-of-order responses: changing a filter while on page ≥ 2
+  // fires a stale-offset fetch alongside the reset-to-page-1 fetch, and the
+  // slower one used to win, showing an empty table.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     setLoading(true); setError('')
     try {
       const [listRes, summaryRes] = await Promise.all([
@@ -239,12 +244,16 @@ export default function CaseAcceptanceEntryPage() {
           search: search || undefined,
         }),
       ])
+      if (seq !== loadSeq.current) return  // superseded by a newer load
       setRows(listRes.data)
       setTotal(listRes.pagination.total)
       setSummary(summaryRes)
     } catch (e: any) {
-      setError(e.response?.data?.error?.message || 'Failed to load entries')
-    } finally { setLoading(false) }
+      if (seq === loadSeq.current)
+        setError(e.response?.data?.error?.message || 'Failed to load entries')
+    } finally {
+      if (seq === loadSeq.current) setLoading(false)
+    }
   }, [filter, limit, offset, search])
 
   useEffect(() => { load() }, [load])
@@ -279,9 +288,10 @@ export default function CaseAcceptanceEntryPage() {
       date_logged:             row.date_logged,
       clinic_id:               row.clinic_id,
       clinician_id:            row.clinician_id,
-      front_staff_name:        (FRONT_STAFF_NAMES as readonly string[]).includes(row.front_staff_name ?? '')
-                                 ? (row.front_staff_name as FrontStaffName)
-                                 : '',
+      // Keep the stored name even when it isn't one of the dropdown options
+      // (receptionist entries stamp the account's full name) — coercing it to
+      // '' here used to wipe the field on any unrelated edit.
+      front_staff_name:        (row.front_staff_name ?? '') as FrontStaffName | '',
       patient_name:            row.patient_name,
       treatment_plan_provided: boolToTri(row.treatment_plan_provided),
       case_recommendations:    String(row.case_recommendations),
@@ -381,6 +391,9 @@ export default function CaseAcceptanceEntryPage() {
                                                return setError('Front of staff name is required')
     if (!form.transition_notes.trim())         return setError('Transition notes are required — explain what was discussed and any objections')
 
+    // Whole numbers only — parseInt would silently truncate "3.7" to 3.
+    if (!/^\d+$/.test(form.case_recommendations.trim())) return setError('Case recommendations must be a whole number')
+    if (!/^\d+$/.test(form.appointments_booked.trim()))  return setError('Appointments booked must be a whole number')
     const recs   = parseInt(form.case_recommendations, 10)
     const booked = parseInt(form.appointments_booked,  10)
     if (!Number.isFinite(recs)   || recs   < 0) return setError('Case recommendations must be a non-negative integer')
@@ -450,9 +463,10 @@ export default function CaseAcceptanceEntryPage() {
           patch.prepay_offered = po
         if (pa !== original.prepay_accepted)
           patch.prepay_accepted = pa
-        if (transition !== original.transition_notes)
+        // Normalize '' vs null so untouched empty notes don't register as a change.
+        if (transition !== (original.transition_notes || null))
           patch.transition_notes = transition
-        if (notes !== original.notes)
+        if (notes !== (original.notes || null))
           patch.notes = notes
 
         if (Object.keys(patch).length === 0) {
@@ -672,6 +686,11 @@ export default function CaseAcceptanceEntryPage() {
                     onChange={e => setForm({ ...form, front_staff_name: e.target.value as FrontStaffName | '' })}
                     style={inputStyle}>
                     <option value="">— Select —</option>
+                    {/* Stamped names (receptionist full names) aren't in the fixed
+                        list — render them so the select shows the stored value. */}
+                    {form.front_staff_name && !(FRONT_STAFF_NAMES as readonly string[]).includes(form.front_staff_name) && (
+                      <option value={form.front_staff_name}>{form.front_staff_name}</option>
+                    )}
                     {FRONT_STAFF_NAMES.map(n => (
                       <option key={n} value={n}>{n}</option>
                     ))}

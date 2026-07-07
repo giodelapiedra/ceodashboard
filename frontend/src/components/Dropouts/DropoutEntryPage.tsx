@@ -198,19 +198,28 @@ export default function DropoutEntryPage() {
     search:       search       || undefined,
   }
 
+  // Guards against out-of-order responses: changing a filter while on page ≥ 2
+  // fires a stale-offset fetch alongside the reset-to-page-1 fetch, and the
+  // slower one used to win, showing an empty table.
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     setLoading(true); setError('')
     try {
       const [res, sum] = await Promise.all([
         dropoutsApi.list({ ...filterParams, limit, offset }),
         dropoutsApi.summary(filterParams),
       ])
+      if (seq !== loadSeq.current) return  // superseded by a newer load
       setRows(res.data)
       setTotal(res.pagination.total)
       setSummary(sum)
     } catch (e: any) {
-      setError(e.response?.data?.error?.message || 'Failed to load dropouts')
-    } finally { setLoading(false) }
+      if (seq === loadSeq.current)
+        setError(e.response?.data?.error?.message || 'Failed to load dropouts')
+    } finally {
+      if (seq === loadSeq.current) setLoading(false)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, search, limit, offset])
 
@@ -232,9 +241,10 @@ export default function DropoutEntryPage() {
       date_logged:                 row.date_logged,
       clinic_id:                   row.clinic_id,
       clinician_id:                row.clinician_id,
-      front_staff_name:            (FRONT_STAFF_NAMES as readonly string[]).includes(row.front_staff_name ?? '')
-                                     ? (row.front_staff_name as FrontStaffName)
-                                     : '',
+      // Keep the stored name even when it isn't one of the dropdown options
+      // (receptionist entries stamp the account's full name) — coercing it to
+      // '' here used to wipe the field on any unrelated edit.
+      front_staff_name:            (row.front_staff_name ?? '') as FrontStaffName | '',
       patient_name:                row.patient_name,
       appointment_cancelled_dates: [...row.appointment_cancelled_dates],
       cancel_date_input:           '',
@@ -422,7 +432,8 @@ export default function DropoutEntryPage() {
           patch.status = form.status
         if (form.reason && form.reason !== original.reason)
           patch.reason = form.reason
-        if (notes !== original.notes)
+        // Normalize '' vs null so untouched empty notes don't register as a change.
+        if (notes !== (original.notes || null))
           patch.notes = notes
 
         if (Object.keys(patch).length === 0) {
@@ -671,6 +682,11 @@ export default function DropoutEntryPage() {
                   onChange={e => setForm({ ...form, front_staff_name: e.target.value as FrontStaffName | '' })}
                   style={inputStyle}>
                   <option value="">— Select —</option>
+                  {/* Stamped names (receptionist full names) aren't in the fixed
+                      list — render them so the select shows the stored value. */}
+                  {form.front_staff_name && !(FRONT_STAFF_NAMES as readonly string[]).includes(form.front_staff_name) && (
+                    <option value={form.front_staff_name}>{form.front_staff_name}</option>
+                  )}
                   {FRONT_STAFF_NAMES.map(n => (
                     <option key={n} value={n}>{n}</option>
                   ))}

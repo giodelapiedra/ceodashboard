@@ -58,7 +58,7 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
   // Popover coordinates (position: fixed). Fixed positioning escapes any
   // ancestor overflow:hidden card that would otherwise clip the calendar.
   // null = not measured yet — popover renders invisible for that first frame.
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; maxH: number } | null>(null)
 
   // One month on narrow screens so the popover fits; two on desktop.
   const [months, setMonths] = useState(() =>
@@ -79,10 +79,21 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
     const margin = 8
     const left = Math.max(margin, Math.min(t.left, window.innerWidth - p.offsetWidth - margin))
     const below = window.innerHeight - t.bottom - margin
-    const top = (p.offsetHeight + margin <= below || below >= t.top - margin)
-      ? t.bottom + margin
-      : Math.max(margin, t.top - p.offsetHeight - margin)
-    setPos({ top, left })
+    const above = t.top - margin
+    // scrollHeight = natural content height even while clamped by a previous
+    // maxH, so growing room back is picked up on the next placement.
+    const ph = p.scrollHeight + 2
+    if (ph + margin <= below || below >= above) {
+      // Below the trigger. maxH caps to the space actually left under `top`,
+      // so a tall calendar scrolls internally instead of running off-screen
+      // (position:fixed content can never be reached by page scrolling).
+      const top = t.bottom + margin
+      setPos({ top, left, maxH: window.innerHeight - top - margin })
+    } else {
+      // Flip above — same cap against the space above the trigger.
+      const h = Math.min(ph, above)
+      setPos({ top: Math.max(margin, t.top - margin - h), left, maxH: above })
+    }
   }
 
   useLayoutEffect(() => {
@@ -142,6 +153,14 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
   }, [value])
 
   const apply = (next: DateRangeValue) => {
+    // Presets go through here too — enforce the cap for them as well.
+    if (maxRangeDays != null) {
+      const spanDays = Math.round((startOfDay(parseISO(next.to)).getTime() - startOfDay(parseISO(next.from)).getTime()) / 86400000) + 1
+      if (spanDays > maxRangeDays) {
+        setRangeError(`Range too large (${spanDays} days). Max ${maxRangeDays}.`)
+        return
+      }
+    }
     onChange(next)
     setOpen(false)
   }
@@ -216,7 +235,7 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
             animation: 'rangePickerFade 0.16s ease',
             minWidth: narrow ? 0 : 600,
             maxWidth: 'calc(100vw - 16px)',
-            maxHeight: 'calc(100vh - 16px)',
+            maxHeight: pos ? pos.maxH : 'calc(100vh - 16px)',
           }}
         >
           <style>{rangePickerCss}</style>

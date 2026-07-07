@@ -89,6 +89,9 @@ export default function EditRequestsPage() {
       await load()
     } catch (e: any) {
       toast.error(e.response?.data?.error?.message || 'Failed to approve')
+      // Reload anyway — the usual failure is "already approved/rejected" by
+      // another admin, and the stale row would keep erroring on every click.
+      await load()
     } finally { setBusyId(null) }
   }
 
@@ -108,6 +111,9 @@ export default function EditRequestsPage() {
       await load()
     } catch (e: any) {
       toast.error(e.response?.data?.error?.message || 'Failed to reject')
+      // Reload anyway — the usual failure is "already approved/rejected" by
+      // another admin, and the stale row would keep erroring on every click.
+      await load()
     } finally { setBusyId(null) }
   }
 
