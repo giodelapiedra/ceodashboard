@@ -81,6 +81,13 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
   const items = NAV_TREE[user.role] ?? []
   const go = (p: AppPage) => { setOpenGroup(null); setMenuOpen(false); navigate(p) }
 
+  // Roles with a card-style landing page get a "← Home" button when away from it.
+  const homePage: AppPage | null =
+    user.role === 'CLINICIAN' ? 'clinician-home'
+    : (user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL') ? 'frontdesk-home'
+    : null
+  const showHome = homePage !== null && page !== homePage
+
   return (
     <div style={{ minHeight: '100vh', background: '#f0f2f5', fontFamily: "'DM Sans', sans-serif" }}>
       <header
@@ -126,9 +133,9 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
                 onNavigate={go}
               />
             ))}
-            {user.role === 'CLINICIAN' && page !== 'clinician-home' && (
+            {showHome && (
               <button
-                onClick={() => navigate('clinician-home')}
+                onClick={() => navigate(homePage!)}
                 style={{
                   background: 'transparent',
                   color: '#fff',
@@ -204,9 +211,9 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
           currentPage={page}
           userLine1={user.full_name || user.email}
           userLine2={`${ROLE_LABEL[user.role]}${user.clinic_id ? ` · ${CLINIC_LABEL[user.clinic_id as ClinicId]}` : ''}`}
-          showHome={user.role === 'CLINICIAN' && page !== 'clinician-home'}
+          showHome={showHome}
           onNavigate={go}
-          onHome={() => { setMenuOpen(false); navigate('clinician-home') }}
+          onHome={() => { setMenuOpen(false); navigate(homePage!) }}
           onChangePwd={() => { setMenuOpen(false); setShowChangePwd(true) }}
           onLogout={logout}
         />

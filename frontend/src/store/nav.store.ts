@@ -16,6 +16,7 @@ export type AppPage =
   | 'drafts'
   | 'ad-spend-entry'
   | 'clinician-home'
+  | 'frontdesk-home'
 
 export const PAGE_PATH: Record<AppPage, string> = {
   'dashboard':                 '/',
@@ -33,6 +34,7 @@ export const PAGE_PATH: Record<AppPage, string> = {
   'drafts':                    '/drafts',
   'ad-spend-entry':            '/ad-spend',
   'clinician-home':            '/clinician-home',
+  'frontdesk-home':            '/frontdesk-home',
 }
 
 const PATH_PAGE: Record<string, AppPage> = Object.fromEntries(

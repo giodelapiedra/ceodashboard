@@ -47,8 +47,10 @@ export default function App() {
         navigate('clinician-home')
       }
     } else {
-      if (!['dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
-        navigate('dropout-entry')
+      // FRONT_DESK / FRONT_DESK_GLOBAL land on the same card-style home page
+      // as clinicians, then pick what to record.
+      if (!['frontdesk-home', 'dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
+        navigate('frontdesk-home')
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,10 +156,11 @@ export default function App() {
     else if (page === 'drafts')                page_node = <DraftsPage />
     else                                       page_node = <ClinicianHomePage />
   } else {
-    // FRONT_DESK, FRONT_DESK_GLOBAL — entry pages + drafts.
+    // FRONT_DESK, FRONT_DESK_GLOBAL — card home + entry pages + drafts.
     if      (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
     else if (page === 'drafts')                page_node = <DraftsPage />
-    else                                       page_node = <DropoutEntryPage />
+    else if (page === 'dropout-entry')         page_node = <DropoutEntryPage />
+    else                                       page_node = <ClinicianHomePage />
   }
 
   return <>{page_node}<ToastContainer /><ConfirmDialog /><PromptDialog /></>
