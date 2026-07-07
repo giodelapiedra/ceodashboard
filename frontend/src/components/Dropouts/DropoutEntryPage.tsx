@@ -144,7 +144,14 @@ export default function DropoutEntryPage() {
   useEffect(() => {
     if (isAdmin) return
     editRequestsApi.myRejected().then(list => {
-      setRejectedEdits(list.filter(r => r.entity_type === 'dropout'))
+      // One banner per entry — keep only the latest rejection (list arrives
+      // newest-first). Repeated rejections of the same entry used to stack
+      // as duplicate banners.
+      const latestPerEntity = new Map<string, typeof list[number]>()
+      for (const r of list.filter(x => x.entity_type === 'dropout')) {
+        if (!latestPerEntity.has(r.entity_id)) latestPerEntity.set(r.entity_id, r)
+      }
+      setRejectedEdits([...latestPerEntity.values()])
     }).catch(() => {})
   }, [isAdmin])
   const dismissRejected = (id: string) => {
@@ -357,6 +364,27 @@ export default function DropoutEntryPage() {
       form.cancel_date_input && !form.appointment_cancelled_dates.includes(form.cancel_date_input)
         ? [...form.appointment_cancelled_dates, form.cancel_date_input].sort()
         : form.appointment_cancelled_dates
+
+    // New entry with a patient name that already exists → warn, don't block.
+    // The same client can legitimately drop out more than once.
+    if (!editingId) {
+      const name = form.patient_name.trim()
+      let dupes: DropoutDTO[] = []
+      try {
+        const res = await dropoutsApi.list({ search: name, limit: 50 })
+        dupes = res.data.filter(d => d.patient_name.trim().toLowerCase() === name.toLowerCase())
+      } catch { /* best-effort — never block saving because the check failed */ }
+      if (dupes.length > 0) {
+        const latest = dupes.map(d => d.date_logged).sort().slice(-1)[0]
+        const ok = await confirmDialog.ask({
+          title:        'Same patient name already logged',
+          message:      `"${name}" already has ${dupes.length === 1 ? 'a dropout entry' : `${dupes.length} dropout entries`} (latest: ${latest}).\n\nIf this is the same client dropping out again, adding another entry is fine. Add this entry?`,
+          confirmLabel: 'Yes, add entry',
+          cancelLabel:  'Cancel',
+        })
+        if (!ok) return
+      }
+    }
 
     // Non-admin editing an existing row → submit an edit request for admin approval.
     if (editingId && !isAdmin) {
