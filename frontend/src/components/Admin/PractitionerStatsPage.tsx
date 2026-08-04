@@ -44,17 +44,22 @@ const MONTHS = [
  * Column spec — header and body both render from this one list, so the two can
  * never drift out of order.
  *
- * The first ten entries are the Practitioner Stats 2026 tab's own columns, in
- * its own order, under its own labels, verified against all ten week blocks in
- * the sheet:
+ * The first nine entries are the nine figures SOP step 6 lists, in that order,
+ * under the labels the SOP and the Practitioner Stats 2026 tab actually use
+ * (Therapist is the row label, not a figure):
  *
- *   Therapist | Total Appts | Occupancy | NC | Recommendations | Conversion |
- *   Case Acceptance | Cancellation % | Prepay % | Prepay Acceptance%
+ *   Total Appts | Occupancy | NC | Recommendations | Conversion |
+ *   Case Accept | Cancellation % | Prepay % | Prepay Acceptance %
  *
  * Renaming or reordering them would break the weekly cross-check against the
- * spreadsheet this report is meant to replace. Where the sheet is inconsistent
- * with itself the clearer form is used: "Case Acceptance" (4 blocks) over "Case
- * Accept" (6), and "Prepay %" (8 blocks) over "Prepay Offered%" (2).
+ * spreadsheet this report is meant to replace.
+ *
+ * Where the sheet disagrees with itself, operational usage wins over the KPI
+ * dictionary — Cath reads the SOP and the tab, not the dictionary:
+ *   "Case Accept"  — SOP step 6, its section heading, its final check, the
+ *                    physio tabs, and 6 of 10 week blocks. Only the KPI
+ *                    dictionary says "Case Acceptance".
+ *   "Prepay %"     — 8 of 10 week blocks, over "Prepay Offered%" (2).
  *
  * Columns this report ADDS come last, after a divider, so nothing the CEO
  * already reads shifts position.
@@ -75,14 +80,14 @@ const COLUMNS: Col[] = [
   { kind: 'metric',  label: 'Conversion',
     title: 'Average appointments booked from initial. Target >6.',
     get: (r) => r.conversion },
-  { kind: 'metric',  label: 'Case Acceptance', suffix: '%',
+  { kind: 'metric',  label: 'Case Accept', suffix: '%',
     title: 'Pooled: sum booked ÷ sum recommendations, per the KPI dictionary. Target >80%. The sheet averages per-patient percentages instead and can differ by 17 points.',
     get: (r) => r.caseAcceptance },
   { kind: 'blocked', label: 'Cancellation %', get: (r) => r.cancellationPct },
   { kind: 'metric',  label: 'Prepay %', suffix: '%',
     title: 'Prepay offered ÷ initial consults. Target 100%. The sheet divides by NC, which is how it produced 125%. No zone band — the KPI dictionary defines none.',
     get: (r) => r.prepayOfferedPct },
-  { kind: 'metric',  label: 'Prepay Acceptance%', suffix: '%',
+  { kind: 'metric',  label: 'Prepay Acceptance %', suffix: '%',
     title: 'Prepay accepted ÷ prepay offered. Target 80%. Blank when nothing was offered. No zone band — the KPI dictionary defines none.',
     get: (r) => r.prepayAcceptedPct },
 
