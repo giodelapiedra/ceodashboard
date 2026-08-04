@@ -360,7 +360,7 @@ export default function PractitionerStatsPage() {
             fontSize: 11.5, fontWeight: 600, color: BLOCKED_FG,
             fontFamily: "'DM Sans', sans-serif",
           }}>
-            <span style={{ fontSize: 10 }}>⚠</span>Needs Nookal data — hover for why
+            <span style={{ fontSize: 10 }}>⚠</span>Hand-read from Nookal — not in the app yet
           </span>
           <span style={{
             fontSize: 11.5, fontWeight: 600, color: TEXT_MUTE,

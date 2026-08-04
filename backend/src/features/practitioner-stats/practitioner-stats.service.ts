@@ -93,15 +93,19 @@ export interface PractitionerStatsReport {
 // Verbatim from the workbook's KPI dictionary tab. Kept as data, not inlined
 // into the comparisons, so changing a target is a one-line edit here.
 
+// Sam confirmed (2026-08-04) that Total Appts, Occupancy and NC cannot be pulled
+// from Nookal. They are read off two Nookal report screens by hand each week and
+// typed into the spreadsheet. So these are not "not yet wired" — there is no API
+// path to them, and the wording must not imply one is coming.
 const NOT_AVAILABLE = {
   totalAppts:
-    'Needs a Nookal providerID → users mapping (users.nookal_provider_id does not exist yet).',
+    'Not available from the Nookal API — read off the Providers & Practice report by hand each week. Still entered in the spreadsheet.',
   newCases:
-    'Needs a Nookal providerID → users mapping (users.nookal_provider_id does not exist yet).',
+    'Not available from the Nookal API — read off the same Providers & Practice report by hand. Still entered in the spreadsheet.',
   occupancy:
-    'Needs practitioner roster / availability hours. Nookal appointment data has no working-hours field.',
+    'Not available from the Nookal API — read off the separate Occupancy report by hand. Nookal appointment data carries no working-hours field.',
   cancellationPct:
-    'Cancellations are counted, but the rate needs Total Appts as its denominator — blocked on the same Nookal mapping.',
+    'The cancellation COUNT is computed here from dropout entries; the rate needs Total Appts as its denominator, which is hand-read. See the Cxl events column for the numerator.',
 } as const;
 
 /** Higher is better, with an explicit target band. */
@@ -325,8 +329,7 @@ export const practitionerStatsService = {
       clinicId,
       weeks: outWeeks,
       notes: [
-        `Total Appts, NC and Occupancy are not shown: ${NOT_AVAILABLE.totalAppts}`,
-        `Occupancy specifically: ${NOT_AVAILABLE.occupancy}`,
+        'Total Appts, Occupancy, NC and Cancellation % cannot be pulled from the Nookal API — they are hand-read from two Nookal reports each week. Until they are entered somewhere the app can read, those four columns stay blank here and live only in the spreadsheet.',
         'Case Acceptance is pooled (sum booked ÷ sum recommendations), per the KPI dictionary. The spreadsheet averages per-patient percentages and can differ by up to 12 points.',
         'Prepay % uses initial consultations as its denominator, not NC. The spreadsheet divides by NC, which is what produced its 125% value.',
         'Recommendations and Conversion average over every initial consult, including those with no treatment plan. Verified against the spreadsheet for June 2026 Week 1 — this reproduces its figures; excluding the zero rows does not.',
