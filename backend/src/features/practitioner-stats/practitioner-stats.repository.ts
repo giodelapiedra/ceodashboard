@@ -81,6 +81,28 @@ const CHURN_STATUSES = [
   'Completed Treatment Plan',
 ];
 
+/** One practitioner-week's hand-entered Nookal figures (migration 024). */
+export interface WeekInputRow {
+  clinician_id:  string;
+  year:          number;
+  month:         number;
+  week_num:      number;   // 1-4, 5 = Remainder
+  total_appts:   number | null;
+  occupancy_pct: number | null;
+  new_cases:     number | null;
+}
+
+export interface UpsertWeekInput {
+  clinician_id:  string;
+  year:          number;
+  month:         number;
+  week_num:      number;
+  total_appts:   number | null;
+  occupancy_pct: number | null;
+  new_cases:     number | null;
+  entered_by:    string;
+}
+
 export const practitionerStatsRepository = {
   /** Case-acceptance side: recommendations, conversion, prepay, treatment plans. */
   async caseAcceptanceByDay(
@@ -211,6 +233,65 @@ export const practitionerStatsRepository = {
     }
 
     return [...merged.values()];
+  },
+
+  /**
+   * The hand-entered Total Appts / Occupancy / NC for one month, all weeks.
+   *
+   * Not filtered by clinic: SOP steps 8 and 16 both read these off Nookal with
+   * "Location — All Location", so they are practice-wide per practitioner and
+   * there is no per-clinic figure to filter to.
+   */
+  async weekInputsFor(year: number, month: number): Promise<WeekInputRow[]> {
+    const { rows } = await query<{
+      clinician_id:  string;
+      year:          number;
+      month:         number;
+      week_num:      number;
+      total_appts:   number | null;
+      occupancy_pct: string | null;   // NUMERIC comes back as text
+      new_cases:     number | null;
+    }>(
+      `SELECT clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases
+         FROM practitioner_week_inputs
+        WHERE year = $1 AND month = $2`,
+      [year, month]
+    );
+    return rows.map((r) => ({
+      clinician_id:  r.clinician_id,
+      year:          Number(r.year),
+      month:         Number(r.month),
+      week_num:      Number(r.week_num),
+      total_appts:   r.total_appts === null ? null : Number(r.total_appts),
+      occupancy_pct: r.occupancy_pct === null ? null : Number(r.occupancy_pct),
+      new_cases:     r.new_cases === null ? null : Number(r.new_cases),
+    }));
+  },
+
+  /**
+   * Upsert one practitioner-week. Keyed on the unique index so re-entering a
+   * week corrects it in place — a second row would be silently double-counted.
+   *
+   * All three values are overwritten, including with NULL, so clearing a
+   * mistyped figure is possible. A row where all three are null is kept rather
+   * than deleted: it records that someone looked and left it blank.
+   */
+  async upsertWeekInput(input: UpsertWeekInput): Promise<void> {
+    await query(
+      `INSERT INTO practitioner_week_inputs
+         (clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases, entered_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (clinician_id, year, month, week_num) DO UPDATE
+          SET total_appts   = EXCLUDED.total_appts,
+              occupancy_pct = EXCLUDED.occupancy_pct,
+              new_cases     = EXCLUDED.new_cases,
+              updated_at    = NOW(),
+              updated_by    = EXCLUDED.entered_by`,
+      [
+        input.clinician_id, input.year, input.month, input.week_num,
+        input.total_appts, input.occupancy_pct, input.new_cases, input.entered_by,
+      ]
+    );
   },
 
   /**

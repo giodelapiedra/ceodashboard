@@ -4,9 +4,9 @@ import {
   PractitionerStatsReport,
   PractitionerWeekStats,
   Metric,
-  UnavailableMetric,
   Zone,
 } from '../../api/practitionerStats.api'
+import { toast } from '../../store/toast.store'
 import { ClinicId, CLINIC_LABEL } from '../../types'
 import AppShell from '../shared/AppShell'
 
@@ -64,16 +64,25 @@ const MONTHS = [
  * Columns this report ADDS come last, after a divider, so nothing the CEO
  * already reads shifts position.
  */
+/** The three figures with no Nookal API path — typed in, so also editable. */
+type ManualField = 'total_appts' | 'occupancy_pct' | 'new_cases'
+
 type Col =
-  | { kind: 'metric';  label: string; title: string; get: (r: PractitionerWeekStats) => Metric; suffix?: string; added?: boolean }
-  | { kind: 'count';   label: string; title: string; get: (r: PractitionerWeekStats) => number; added?: boolean }
-  | { kind: 'blocked'; label: string; get: (r: PractitionerWeekStats) => UnavailableMetric }
+  | { kind: 'metric'; label: string; title: string; get: (r: PractitionerWeekStats) => Metric; suffix?: string; added?: boolean }
+  | { kind: 'count';  label: string; title: string; get: (r: PractitionerWeekStats) => number; added?: boolean }
+  | { kind: 'manual'; label: string; title: string; field: ManualField; suffix?: string; get: (r: PractitionerWeekStats) => Metric }
 
 const COLUMNS: Col[] = [
   // ── the sheet's columns, in the sheet's order ──
-  { kind: 'blocked', label: 'Total Appts', get: (r) => r.totalAppts },
-  { kind: 'blocked', label: 'Occupancy',   get: (r) => r.occupancy  },
-  { kind: 'blocked', label: 'NC',          get: (r) => r.newCases   },
+  { kind: 'manual', label: 'Total Appts', field: 'total_appts',
+    title: 'Hand-read: Nookal → Reports → Providers & Practice → Completed Consults (SOP steps 7-11). All locations. Also the denominator for Cancellation %.',
+    get: (r) => r.totalAppts },
+  { kind: 'manual', label: 'Occupancy', field: 'occupancy_pct', suffix: '%',
+    title: 'Hand-read: Nookal → Reports → Occupancy (SOP steps 15-18). Target >80%. Over 100% means the roster hours in Nookal are wrong.',
+    get: (r) => r.occupancy },
+  { kind: 'manual', label: 'NC', field: 'new_cases',
+    title: 'Hand-read: same Providers & Practice report → New Cases (SOP steps 12-14).',
+    get: (r) => r.newCases },
   { kind: 'metric',  label: 'Recommendations', suffix: '',
     title: 'Average treatment-plan recommendations per initial consult. Target 8–12.',
     get: (r) => r.recommendations },
@@ -83,7 +92,9 @@ const COLUMNS: Col[] = [
   { kind: 'metric',  label: 'Case Accept', suffix: '%',
     title: 'Pooled: sum booked ÷ sum recommendations, per the KPI dictionary. Target >80%. The sheet averages per-patient percentages instead and can differ by 17 points.',
     get: (r) => r.caseAcceptance },
-  { kind: 'blocked', label: 'Cancellation %', get: (r) => r.cancellationPct },
+  { kind: 'metric',  label: 'Cancellation %', suffix: '%',
+    title: 'Computed: cancellation events ÷ Total Appts. Target <10%. Replaces SOP steps 30-39 — the ten Nookal Cancellation reports and the manual NFB cross-check.',
+    get: (r) => r.cancellationPct },
   { kind: 'metric',  label: 'Prepay %', suffix: '%',
     title: 'Prepay offered ÷ initial consults. Target 100%. The sheet divides by NC, which is how it produced 125%. No zone band — the KPI dictionary defines none.',
     get: (r) => r.prepayOfferedPct },
@@ -120,6 +131,16 @@ function ZoneCell({ m, suffix = '', extra }: { m: Metric; suffix?: string; extra
     return (
       <td style={{ ...cellBase, ...extra, color: TEXT_MUTE, fontWeight: 400 }} title="No data logged for this week">
         —
+      </td>
+    )
+  }
+  // A value carrying a note is a warning, not a performance reading — occupancy
+  // over 100% is a roster error. Flag it in the impossible-value colour so it is
+  // never mistaken for a good score.
+  if (m.note) {
+    return (
+      <td style={{ ...cellBase, ...extra, color: BLOCKED_FG, background: BLOCKED_BG }} title={m.note}>
+        ⚠ {fmt(m, suffix)}
       </td>
     )
   }
@@ -170,8 +191,21 @@ const thBase: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-function StatsRow({ r, isTeam }: { r: PractitionerWeekStats; isTeam?: boolean }) {
+type DraftRow = Partial<Record<ManualField, string>>
+
+interface StatsRowProps {
+  r:        PractitionerWeekStats
+  isTeam?:  boolean
+  /** Edit mode is off for the Team row — its figures are sums of the rows above. */
+  editing?: boolean
+  draft?:   DraftRow
+  onEdit?:  (field: ManualField, raw: string) => void
+  onCommit?: () => void
+}
+
+function StatsRow({ r, isTeam, editing, draft, onEdit, onCommit }: StatsRowProps) {
   const rowBg = isTeam ? '#f9fafb' : '#fff'
+  const canEdit = !!editing && !isTeam
   return (
     <tr style={{ background: rowBg }}>
       <td
@@ -193,16 +227,43 @@ function StatsRow({ r, isTeam }: { r: PractitionerWeekStats; isTeam?: boolean })
         const extra: React.CSSProperties =
           i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}
 
-        if (c.kind === 'blocked') {
-          return (
-            <td
-              key={c.label}
-              style={{ ...cellBase, ...extra, color: BLOCKED_FG, background: BLOCKED_BG, opacity: 0.85 }}
-              title={c.get(r).reason}
-            >
-              ⚠
-            </td>
-          )
+        if (c.kind === 'manual') {
+          if (canEdit) {
+            return (
+              <td key={c.label} style={{ ...cellBase, ...extra, padding: '3px 4px' }}>
+                <input
+                  type="number"
+                  step={c.field === 'occupancy_pct' ? '0.01' : '1'}
+                  min="0"
+                  value={draft?.[c.field] ?? ''}
+                  onChange={(e) => onEdit?.(c.field, e.target.value)}
+                  onBlur={onCommit}
+                  aria-label={`${c.label} for ${r.clinicianName}`}
+                  style={{
+                    width: 64, padding: '4px 6px', textAlign: 'right',
+                    border: `1px solid ${BORDER}`, borderRadius: 4,
+                    fontFamily: "'DM Mono', ui-monospace, monospace",
+                    fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
+                  }}
+                />
+              </td>
+            )
+          }
+          // Read mode: an unentered manual figure gets the ⚠ treatment with the
+          // Nookal path in the tooltip, so it reads as "go and enter this".
+          const m = c.get(r)
+          if (m.value === null) {
+            return (
+              <td
+                key={c.label}
+                style={{ ...cellBase, ...extra, color: BLOCKED_FG, background: BLOCKED_BG, opacity: 0.85 }}
+                title={m.note}
+              >
+                ⚠
+              </td>
+            )
+          }
+          return <ZoneCell key={c.label} m={m} suffix={c.suffix} extra={extra} />
         }
         if (c.kind === 'count') {
           // A genuine zero prints as 0, never as an em dash — conflating "none"
@@ -225,6 +286,12 @@ export default function PractitionerStatsPage() {
   const [report,  setReport]  = useState<PractitionerStatsReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
+
+  const [editing, setEditing] = useState(false)
+  // Drafts are keyed by clinician and held as strings so a half-typed value and a
+  // deliberately cleared field both survive until commit.
+  const [drafts,  setDrafts]  = useState<Record<string, DraftRow>>({})
+  const [saving,  setSaving]  = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -261,6 +328,64 @@ export default function PractitionerStatsPage() {
   // The calculator emits an empty remainder as 9999-12-31 when a month ends on
   // Week 4's Sunday — don't offer a tab for a range that does not exist.
   const selectableWeeks = (report?.weeks ?? []).filter((w) => w.dateFrom !== '9999-12-31')
+
+  /** Seed drafts from what is already stored, so editing starts from the truth. */
+  const beginEdit = () => {
+    if (!week) return
+    const seed: Record<string, DraftRow> = {}
+    for (const r of week.rows) {
+      seed[r.clinicianId] = {
+        total_appts:   r.totalAppts.value === null ? '' : String(r.totalAppts.value),
+        occupancy_pct: r.occupancy.value  === null ? '' : String(r.occupancy.value),
+        new_cases:     r.newCases.value   === null ? '' : String(r.newCases.value),
+      }
+    }
+    setDrafts(seed)
+    setEditing(true)
+  }
+
+  const editField = (clinicianId: string, field: ManualField, raw: string) => {
+    setDrafts((d) => ({ ...d, [clinicianId]: { ...d[clinicianId], [field]: raw } }))
+  }
+
+  /** An empty box means "no figure", which is not the same as 0 — send null. */
+  const numOrNull = (raw: string | undefined): number | null => {
+    if (raw === undefined || raw.trim() === '') return null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  }
+
+  const commitRow = async (clinicianId: string) => {
+    if (!week) return
+    const d = drafts[clinicianId]
+    if (!d) return
+    try {
+      await practitionerStatsApi.saveWeekInput({
+        clinician_id:  clinicianId,
+        year, month,
+        // The Remainder column is stored as week 5.
+        week_num:      week.weekNum === 'remainder' ? 5 : week.weekNum,
+        total_appts:   numOrNull(d.total_appts),
+        occupancy_pct: numOrNull(d.occupancy_pct),
+        new_cases:     numOrNull(d.new_cases),
+      })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not save'
+      toast.error(`${msg} — this practitioner's figures were not saved`)
+    }
+  }
+
+  /** Reload on exit so Cancellation % and the Team row recompute from what was
+   *  saved, rather than leaving stale derived values on screen. */
+  const finishEdit = async () => {
+    setSaving(true)
+    try {
+      await load()
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <AppShell>
@@ -347,6 +472,36 @@ export default function PractitionerStatsPage() {
               ))}
             </div>
           )}
+
+          {week && (
+            editing ? (
+              <button
+                onClick={finishEdit}
+                disabled={saving}
+                style={{
+                  marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
+                  border: 'none', background: TEAL, color: '#fff',
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
+                  cursor: saving ? 'wait' : 'pointer',
+                }}
+              >
+                {saving ? 'Saving…' : 'Done'}
+              </button>
+            ) : (
+              <button
+                onClick={beginEdit}
+                title="Enter the three figures Nookal will not give us: Total Appts, Occupancy and NC"
+                style={{
+                  marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
+                  border: `1px solid ${TEAL}`, background: '#f0faf7', color: TEAL,
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Enter Nookal figures
+              </button>
+            )
+          )}
         </div>
 
         {/* Zone legend */}
@@ -365,7 +520,7 @@ export default function PractitionerStatsPage() {
             fontSize: 11.5, fontWeight: 600, color: BLOCKED_FG,
             fontFamily: "'DM Sans', sans-serif",
           }}>
-            <span style={{ fontSize: 10 }}>⚠</span>Hand-read from Nookal — not in the app yet
+            <span style={{ fontSize: 10 }}>⚠</span>Not entered yet, or an impossible value — hover for why
           </span>
           <span style={{
             fontSize: 11.5, fontWeight: 600, color: TEXT_MUTE,
@@ -420,11 +575,13 @@ export default function PractitionerStatsPage() {
                     {COLUMNS.map((c, i) => (
                       <th
                         key={c.label}
-                        title={c.kind === 'blocked' ? undefined : c.title}
+                        title={c.title}
                         style={{
                           ...thBase,
                           ...(i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}),
-                          ...(c.kind === 'blocked' ? { color: BLOCKED_FG, background: BLOCKED_BG } : {}),
+                          // Hand-entered columns are tinted so it is obvious which
+                          // three still need a human to read them off Nookal.
+                          ...(c.kind === 'manual' ? { color: BLOCKED_FG, background: BLOCKED_BG } : {}),
                           ...('added' in c && c.added ? { fontStyle: 'italic' } : {}),
                         }}
                       >
@@ -434,7 +591,16 @@ export default function PractitionerStatsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {week.rows.map((r) => <StatsRow key={r.clinicianId} r={r} />)}
+                  {week.rows.map((r) => (
+                    <StatsRow
+                      key={r.clinicianId}
+                      r={r}
+                      editing={editing}
+                      draft={drafts[r.clinicianId]}
+                      onEdit={(field, raw) => editField(r.clinicianId, field, raw)}
+                      onCommit={() => commitRow(r.clinicianId)}
+                    />
+                  ))}
                   <StatsRow r={week.team} isTeam />
                 </tbody>
               </table>

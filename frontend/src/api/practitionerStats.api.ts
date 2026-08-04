@@ -6,13 +6,22 @@ export type Zone = 'thriving' | 'refining' | 'reset';
 export interface Metric {
   value: number | null;
   zone:  Zone | null;
+  /** True for the hand-entered figures (Total Appts, Occupancy, NC) — editable. */
+  manual?: boolean;
+  /** Why the cell is blank, or a warning about the value in it. */
+  note?: string;
 }
 
-/** A column the backend cannot fill yet — `reason` explains what is missing. */
-export interface UnavailableMetric {
-  value:  null;
-  zone:   null;
-  reason: string;
+/** One practitioner-week of hand-read Nookal figures. */
+export interface WeekInputPayload {
+  clinician_id:  string;
+  year:          number;
+  month:         number;
+  /** 1-4, or 5 for the Remainder column. */
+  week_num:      number;
+  total_appts:   number | null;
+  occupancy_pct: number | null;
+  new_cases:     number | null;
 }
 
 export interface PractitionerWeekStats {
@@ -32,10 +41,12 @@ export interface PractitionerWeekStats {
   cancellations: number;
   churns:        number;
 
-  totalAppts:      UnavailableMetric;
-  newCases:        UnavailableMetric;
-  occupancy:       UnavailableMetric;
-  cancellationPct: UnavailableMetric;
+  /** Hand-entered — no Nookal API path exists to these. */
+  totalAppts: Metric;
+  occupancy:  Metric;
+  newCases:   Metric;
+  /** Computed from the entered Total Appts. */
+  cancellationPct: Metric;
 }
 
 export interface PractitionerStatsWeek {
@@ -70,5 +81,13 @@ export const practitionerStatsApi = {
       params: { year, month, ...(clinicId ? { clinic_id: clinicId } : {}) },
     });
     return data;
+  },
+
+  /**
+   * Save the three hand-read Nookal figures for one practitioner-week. Upsert —
+   * saving the same week again corrects it rather than adding a duplicate.
+   */
+  async saveWeekInput(payload: WeekInputPayload): Promise<void> {
+    await api.put('/api/practitioner-stats/week-input', payload);
   },
 };

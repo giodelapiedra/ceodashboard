@@ -4,6 +4,7 @@ import {
   practitionerStatsRepository,
   PractitionerDayRow,
   CancellationDayRow,
+  WeekInputRow,
 } from './practitioner-stats.repository';
 
 /**
@@ -34,13 +35,14 @@ export type Zone = 'thriving' | 'refining' | 'reset';
 export interface Metric {
   value: number | null;
   zone:  Zone | null;
-}
-
-/** A metric the DB genuinely cannot produce yet, with the reason attached. */
-export interface UnavailableMetric {
-  value:  null;
-  zone:   null;
-  reason: string;
+  /**
+   * True for the three figures that cannot be pulled from Nookal and are typed
+   * in by hand (Total Appts, Occupancy, NC), plus Cancellation % which is
+   * derived from one of them. Lets the UI mark them and offer editing.
+   */
+  manual?: boolean;
+  /** Why the cell is blank, or a warning about the value that is there. */
+  note?: string;
 }
 
 export interface PractitionerWeekStats {
@@ -65,10 +67,12 @@ export interface PractitionerWeekStats {
   cancellations: number;
   churns:        number;
 
-  totalAppts:     UnavailableMetric;
-  newCases:       UnavailableMetric;
-  occupancy:      UnavailableMetric;
-  cancellationPct: UnavailableMetric;
+  /** Hand-entered (migration 024) — no Nookal API path exists to these. */
+  totalAppts: Metric;
+  occupancy:  Metric;
+  newCases:   Metric;
+  /** Computed: cancellation events ÷ hand-entered Total Appts. */
+  cancellationPct: Metric;
 }
 
 export interface PractitionerStatsWeek {
@@ -94,19 +98,31 @@ export interface PractitionerStatsReport {
 // into the comparisons, so changing a target is a one-line edit here.
 
 // Sam confirmed (2026-08-04) that Total Appts, Occupancy and NC cannot be pulled
-// from Nookal. They are read off two Nookal report screens by hand each week and
-// typed into the spreadsheet. So these are not "not yet wired" — there is no API
-// path to them, and the wording must not imply one is coming.
-const NOT_AVAILABLE = {
+// from Nookal. They are read off two Nookal report screens by hand (SOP steps
+// 7-18) and are now entered in the app instead of the spreadsheet, so all nine
+// SOP columns can be shown in one place.
+const NOT_ENTERED = {
   totalAppts:
-    'Not available from the Nookal API — read off the Providers & Practice report by hand each week. Still entered in the spreadsheet.',
+    'Not entered yet. Nookal → Reports → Providers & Practice → Completed Consults (SOP steps 7-11). No API path exists to this figure.',
   newCases:
-    'Not available from the Nookal API — read off the same Providers & Practice report by hand. Still entered in the spreadsheet.',
+    'Not entered yet. Same Providers & Practice report → New Cases (SOP steps 12-14).',
   occupancy:
-    'Not available from the Nookal API — read off the separate Occupancy report by hand. Nookal appointment data carries no working-hours field.',
+    'Not entered yet. Nookal → Reports → Occupancy (SOP steps 15-18). The appointment feed carries no working-hours field, so this cannot be derived.',
   cancellationPct:
-    'The cancellation COUNT is computed here from dropout entries; the rate needs Total Appts as its denominator, which is hand-read. See the Cxl events column for the numerator.',
+    'Needs Total Appts as its denominator. The numerator is already computed — see Cxl events.',
 } as const;
+
+/** Occupancy above 100% is arithmetically impossible: it means the practitioner's
+ *  roster hours in Nookal are shorter than what was actually booked. Surfaced as
+ *  a warning rather than rejected, so the underlying roster error stays visible. */
+const OCCUPANCY_IMPOSSIBLE =
+  'Above 100% — the roster/working hours for this practitioner in Nookal are wrong, not their performance.';
+
+/** Attached to every Cancellation % so nobody acts on it before the definition
+ *  is settled. See the comment at the cancellationPct assignment for the
+ *  reconciliation evidence. */
+const CANCELLATION_UNRECONCILED =
+  'UNVERIFIED — cancellation events ÷ Total Appts. Does not reconcile with the spreadsheet (Isabella, June 2026 W1: sheet 12%, this method 30-46% depending on date bucketing). SOP step 39 excludes churns but its own examples include them. Do not act on this figure until the count is agreed.';
 
 /** Higher is better, with an explicit target band. */
 function zoneHigher(value: number, thriving: number, refining: number): Zone {
@@ -115,7 +131,7 @@ function zoneHigher(value: number, thriving: number, refining: number): Zone {
   return 'reset';
 }
 
-/** Lower is better (cancellation-style metrics). Unused until Total Appts lands. */
+/** Lower is better (cancellation-style metrics). */
 export function zoneLower(value: number, thriving: number, refining: number): Zone {
   if (value < thriving) return 'thriving';
   if (value <= refining) return 'refining';
@@ -146,6 +162,10 @@ const zoneRecommendations = (v: number) => zoneHigher(v, 8, 6);
 const zoneConversion      = (v: number) => zoneHigher(v, 6, 5);
 const zoneCaseAcceptance  = (v: number) => zoneHigher(v, 80, 70);
 const zoneTpDocumented    = (v: number) => zoneHigher(v, 100, 80);
+// Both documented in the KPI dictionary: Occupancy >80 / >70 / <70, Cancellation
+// Rates <10% / 11-15% / >15%.
+const zoneOccupancy       = (v: number) => zoneHigher(v, 80, 70);
+const zoneCancellation    = (v: number) => zoneLower(v, 10, 15);
 // The prepay rates get NO zone. The KPI dictionary defines no bands for them —
 // the Prepayment tab only states bare targets (100% offer, 80% acceptance) with
 // nothing in between — so any three-way split would be invented. The targets are
@@ -166,12 +186,25 @@ interface Counters {
   prepayAccepted:  number;
   cancellations:   number;
   churns:          number;
+
+  // Hand-entered figures, held as sum + count so one code path serves both a
+  // single practitioner (n = 0 or 1) and the Team row (n = however many were
+  // entered). Total Appts and NC pool by summing; Occupancy can only be meaned —
+  // pooling it properly would need the roster hours behind each percentage, and
+  // those are exactly what Nookal does not give us.
+  apptsSum: number; apptsN: number;
+  ncSum:    number; ncN:    number;
+  occSum:   number; occN:   number;
+  /** Any contributing occupancy over 100%, so the Team row can flag it too. */
+  occImpossible: boolean;
 }
 
 const emptyCounters = (): Counters => ({
   initials: 0, sumRecs: 0, sumBooked: 0, rowsWithRecs: 0,
   tpYes: 0, tpNo: 0, prepayOffered: 0, prepayAccepted: 0,
   cancellations: 0, churns: 0,
+  apptsSum: 0, apptsN: 0, ncSum: 0, ncN: 0, occSum: 0, occN: 0,
+  occImpossible: false,
 });
 
 function addCaseRow(c: Counters, r: PractitionerDayRow): void {
@@ -188,6 +221,16 @@ function addCaseRow(c: Counters, r: PractitionerDayRow): void {
 function addCancelRow(c: Counters, r: CancellationDayRow): void {
   c.cancellations += r.cancellations;
   c.churns        += r.churns;
+}
+
+function addWeekInput(c: Counters, r: WeekInputRow): void {
+  if (r.total_appts !== null)   { c.apptsSum += r.total_appts; c.apptsN += 1; }
+  if (r.new_cases   !== null)   { c.ncSum    += r.new_cases;   c.ncN    += 1; }
+  if (r.occupancy_pct !== null) {
+    c.occSum += r.occupancy_pct;
+    c.occN   += 1;
+    if (r.occupancy_pct > 100) c.occImpossible = true;
+  }
 }
 
 function toStats(
@@ -240,10 +283,46 @@ function toStats(
     prepayAcceptedPct: plain(prepayAccPct),
     cancellations:     c.cancellations,
     churns:            c.churns,
-    totalAppts:      { value: null, zone: null, reason: NOT_AVAILABLE.totalAppts },
-    newCases:        { value: null, zone: null, reason: NOT_AVAILABLE.newCases },
-    occupancy:       { value: null, zone: null, reason: NOT_AVAILABLE.occupancy },
-    cancellationPct: { value: null, zone: null, reason: NOT_AVAILABLE.cancellationPct },
+
+    totalAppts: c.apptsN > 0
+      ? { value: c.apptsSum, zone: null, manual: true }
+      : { value: null, zone: null, manual: true, note: NOT_ENTERED.totalAppts },
+
+    occupancy: c.occN > 0
+      ? {
+          // Mean, not a pooled rate — see Counters.occSum.
+          value:   round2(c.occSum / c.occN),
+          zone:    zoneOccupancy(c.occSum / c.occN),
+          manual:  true,
+          ...(c.occImpossible ? { note: OCCUPANCY_IMPOSSIBLE } : {}),
+        }
+      : { value: null, zone: null, manual: true, note: NOT_ENTERED.occupancy },
+
+    newCases: c.ncN > 0
+      ? { value: c.ncSum, zone: null, manual: true }
+      : { value: null, zone: null, manual: true, note: NOT_ENTERED.newCases },
+
+    // DELIBERATELY UNZONED — this figure does not yet reconcile with the
+    // spreadsheet and must not drive decisions until it does.
+    //
+    // Checked against Isabella, June 2026 Week 1: the sheet shows 12.00% on 50
+    // appts, implying a numerator of 6. The database holds 15 dropout entries for
+    // her that week bucketed on date_logged, or 23 bucketed on the cancelled
+    // appointment date. Neither is 6, and excluding churns leaves about 1.
+    //
+    // The SOP contradicts itself on what to count, which is likely the root
+    // cause: step 39 says "count the cancelled patients … churns are not
+    // included in this count", while its own examples say a cancelled sole
+    // appointment "is both a cancellation and a churn statistic". Until Sam
+    // settles that, the value is shown bare with the discrepancy attached rather
+    // than dressed in a green or red zone it has not earned.
+    cancellationPct: c.apptsSum > 0
+      ? {
+          value: round2((c.cancellations / c.apptsSum) * 100),
+          zone:  null,
+          note:  CANCELLATION_UNRECONCILED,
+        }
+      : { value: null, zone: null, note: NOT_ENTERED.cancellationPct },
   };
 }
 
@@ -263,10 +342,11 @@ export const practitionerStatsService = {
     const dateFrom = real.reduce((a, w) => (w.dateFrom < a ? w.dateFrom : a), real[0].dateFrom);
     const dateTo   = real.reduce((a, w) => (w.dateTo   > a ? w.dateTo   : a), real[0].dateTo);
 
-    const [caseRows, cancelRows, clinicians] = await Promise.all([
+    const [caseRows, cancelRows, clinicians, weekInputs] = await Promise.all([
       practitionerStatsRepository.caseAcceptanceByDay(dateFrom, dateTo, clinicId),
       practitionerStatsRepository.cancellationsByDay(dateFrom, dateTo, clinicId),
       practitionerStatsRepository.activeClinicians(clinicId),
+      practitionerStatsRepository.weekInputsFor(year, month),
     ]);
 
     // Names for anyone who appears in the data but is no longer in the active
@@ -308,6 +388,17 @@ export const practitionerStatsService = {
         addCancelRow(bump(r.clinician_id), r);
         addCancelRow(teamTotals, r);
       }
+      // Hand-entered figures are keyed by week number, not by date — the
+      // Remainder column is stored as 5.
+      const wkNum = w.weekNum === 'remainder' ? 5 : w.weekNum;
+      for (const r of weekInputs) {
+        if (r.week_num !== wkNum) continue;
+        // A figure for a clinician outside the current clinic filter must not
+        // leak into this view's Team row.
+        if (!byClinician.has(r.clinician_id) && !nameOf.has(r.clinician_id)) continue;
+        addWeekInput(bump(r.clinician_id), r);
+        addWeekInput(teamTotals, r);
+      }
 
       const rows = [...byClinician.entries()]
         .map(([id, c]) => toStats(id, nameOf.get(id) ?? `Clinician ${id}`, clinicOf.get(id) ?? null, c))
@@ -329,7 +420,10 @@ export const practitionerStatsService = {
       clinicId,
       weeks: outWeeks,
       notes: [
-        'Total Appts, Occupancy, NC and Cancellation % cannot be pulled from the Nookal API — they are hand-read from two Nookal reports each week. Until they are entered somewhere the app can read, those four columns stay blank here and live only in the spreadsheet.',
+        'Total Appts, Occupancy and NC cannot be pulled from the Nookal API — they are read off two Nookal reports by hand (SOP steps 7-18) and entered here.',
+        'Cancellation % is UNVERIFIED and shown without a zone colour. It does not reconcile with the spreadsheet: for Isabella in June 2026 Week 1 the sheet shows 12% on 50 appts (a count of 6), while the database holds 15 dropout entries for that week by logged date, or 23 by cancelled-appointment date. SOP step 39 says to exclude churns, but its own examples count a cancelled sole appointment as both. The counting rule needs to be settled before this figure is used.',
+        'Occupancy is averaged across practitioners for the Team row, not pooled — pooling would need the roster hours behind each percentage, which Nookal does not expose. Total Appts, NC and Cancellation % are pooled properly.',
+        'The three hand-entered figures are practice-wide per practitioner: SOP steps 8 and 16 both set the Nookal location filter to "All Location", so they are not split by clinic and do not change when the clinic tab does.',
         'Case Acceptance is pooled (sum booked ÷ sum recommendations), per the KPI dictionary. The spreadsheet averages per-patient percentages and can differ by up to 12 points.',
         'Prepay % uses initial consultations as its denominator, not NC. The spreadsheet divides by NC, which is what produced its 125% value.',
         'Recommendations and Conversion average over every initial consult, including those with no treatment plan. Verified against the spreadsheet for June 2026 Week 1 — this reproduces its figures; excluding the zero rows does not.',
