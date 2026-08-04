@@ -98,8 +98,6 @@ export interface PractitionerStatsReport {
   month:    number;
   clinicId: string | null;
   weeks:    PractitionerStatsWeek[];
-  /** Surfaced to the UI so the gaps are stated, not silently blank. */
-  notes:    string[];
 }
 
 // ── Zone thresholds ────────────────────────────────────────────────────────
@@ -438,18 +436,11 @@ export const practitionerStatsService = {
       year,
       month,
       clinicId,
+      // No `notes` array. Every caveat that used to live in a wall of text under
+      // the table is now attached to the thing it describes — the column tooltip
+      // or the cell's own `note` — so it is read at the moment it matters instead
+      // of being scrolled past.
       weeks: outWeeks,
-      notes: [
-        'Total Appts, Occupancy and NC cannot be pulled from the Nookal API — they are read off two Nookal reports by hand (SOP steps 7-18) and entered here.',
-        'Cancellation % is UNVERIFIED and shown without a zone colour. It does not reconcile with the spreadsheet: for Isabella in June 2026 Week 1 the sheet shows 12% on 50 appts (a count of 6), while the database holds 15 dropout entries for that week by logged date, or 23 by cancelled-appointment date. SOP step 39 says to exclude churns, but its own examples count a cancelled sole appointment as both. The counting rule needs to be settled before this figure is used.',
-        'Occupancy is averaged across practitioners for the Team row, not pooled — pooling would need the roster hours behind each percentage, which Nookal does not expose. Total Appts, NC and Cancellation % are pooled properly.',
-        'The three hand-entered figures are practice-wide per practitioner: SOP steps 8 and 16 both set the Nookal location filter to "All Location", so they are not split by clinic and do not change when the clinic tab does.',
-        'Case Acceptance is pooled (sum booked ÷ sum recommendations), per the KPI dictionary. The spreadsheet averages per-patient percentages and can differ by up to 12 points.',
-        'Prepay % uses initial consultations as its denominator, not NC. The spreadsheet divides by NC, which is what produced its 125% value.',
-        'Recommendations and Conversion average over every initial consult, including those with no treatment plan. Verified against the spreadsheet for June 2026 Week 1 — this reproduces its figures; excluding the zero rows does not.',
-        'Cancellations count events per cancelled appointment date (one dropout entry can hold several), bucketed on the cancelled date rather than the day it was keyed. Churns count patients, on their last cancelled date.',
-        'Prepay % and Prepay Acceptance % carry no zone colour: the KPI dictionary defines bare targets (100% / 80%) but no Refining band, and an invented boundary would be indistinguishable on screen from a documented one.',
-      ],
     };
   },
 };

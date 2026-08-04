@@ -67,58 +67,91 @@ const MONTHS = [
 /** The three figures with no Nookal API path — typed in, so also editable. */
 type ManualField = 'total_appts' | 'occupancy_pct' | 'new_cases'
 
-type Col =
-  | { kind: 'metric'; label: string; title: string; get: (r: PractitionerWeekStats) => Metric; suffix?: string; added?: boolean }
-  | { kind: 'count';  label: string; title: string; get: (r: PractitionerWeekStats) => number; added?: boolean }
+/**
+ * Column bands. The SOP lists nine figures in a fixed order and the table keeps
+ * it, so the bands are drawn around that order rather than reordering to suit
+ * them — they name what the eye is already grouping.
+ */
+type Band = 'volume' | 'clinical' | 'retention' | 'prepay' | 'added'
+
+const BANDS: Record<Band, { label: string; tint: string; ink: string }> = {
+  // Tints stay very pale: the zone chips inside these cells carry the meaning,
+  // and a saturated band would compete with them.
+  volume:    { label: 'Volume',      tint: '#eff4f8', ink: '#5b6b7a' },
+  clinical:  { label: 'Clinical',    tint: '#f0faf7', ink: '#0f6e56' },
+  retention: { label: 'Retention',   tint: '#fdf3f4', ink: '#9c3f4c' },
+  prepay:    { label: 'Prepay',      tint: '#f8f5ee', ink: '#8a7333' },
+  added:     { label: 'Added here',  tint: '#f5f5f7', ink: '#6b7280' },
+}
+
+type Col = { band: Band } & (
+  | { kind: 'metric'; label: string; title: string; get: (r: PractitionerWeekStats) => Metric; suffix?: string }
+  | { kind: 'count';  label: string; title: string; get: (r: PractitionerWeekStats) => number }
   | { kind: 'manual'; label: string; title: string; field: ManualField; suffix?: string; get: (r: PractitionerWeekStats) => Metric }
+)
 
 const COLUMNS: Col[] = [
   // ── the sheet's columns, in the sheet's order ──
-  { kind: 'manual', label: 'Total Appts', field: 'total_appts',
+  { band: 'volume',    kind: 'manual', label: 'Total Appts', field: 'total_appts',
     title: 'Hand-read: Nookal → Reports → Providers & Practice → Completed Consults (SOP steps 7-11). All locations. Also the denominator for Cancellation %.',
     get: (r) => r.totalAppts },
-  { kind: 'manual', label: 'Occupancy', field: 'occupancy_pct', suffix: '%',
+  { band: 'volume',    kind: 'manual', label: 'Occupancy', field: 'occupancy_pct', suffix: '%',
     title: 'Hand-read: Nookal → Reports → Occupancy (SOP steps 15-18). Target >80%. Over 100% means the roster hours in Nookal are wrong.',
     get: (r) => r.occupancy },
-  { kind: 'manual', label: 'NC', field: 'new_cases',
+  { band: 'volume',    kind: 'manual', label: 'NC', field: 'new_cases',
     title: 'Hand-read: same Providers & Practice report → New Cases (SOP steps 12-14).',
     get: (r) => r.newCases },
-  { kind: 'metric',  label: 'Recommendations', suffix: '',
+  { band: 'clinical',  kind: 'metric', label: 'Recommendations', suffix: '',
     title: 'Average treatment-plan recommendations per initial consult. Target 8–12.',
     get: (r) => r.recommendations },
-  { kind: 'metric',  label: 'Conversion',
+  { band: 'clinical',  kind: 'metric', label: 'Conversion',
     title: 'Average appointments booked from initial. Target >6.',
     get: (r) => r.conversion },
-  { kind: 'metric',  label: 'Case Accept', suffix: '%',
+  { band: 'clinical',  kind: 'metric', label: 'Case Accept', suffix: '%',
     title: 'Pooled: sum booked ÷ sum recommendations, per the KPI dictionary. Target >80%. The sheet averages per-patient percentages instead and can differ by 17 points.',
     get: (r) => r.caseAcceptance },
-  { kind: 'metric',  label: 'Cancellation %', suffix: '%',
+  { band: 'retention', kind: 'metric', label: 'Cancellation %', suffix: '%',
     title: 'Computed: cancellation events ÷ Total Appts. Target <10%. Replaces SOP steps 30-39 — the ten Nookal Cancellation reports and the manual NFB cross-check.',
     get: (r) => r.cancellationPct },
-  { kind: 'metric',  label: 'Prepay %', suffix: '%',
+  { band: 'prepay',    kind: 'metric', label: 'Prepay %', suffix: '%',
     title: 'Prepay offered ÷ initial consults. Target 100%. The sheet divides by NC, which is how it produced 125%. No zone band — the KPI dictionary defines none.',
     get: (r) => r.prepayOfferedPct },
-  { kind: 'metric',  label: 'Prepay Acceptance %', suffix: '%',
+  { band: 'prepay',    kind: 'metric', label: 'Prepay Acceptance %', suffix: '%',
     title: 'Prepay accepted ÷ prepay offered. Target 80%. Blank when nothing was offered. No zone band — the KPI dictionary defines none.',
     get: (r) => r.prepayAcceptedPct },
 
   // ── added by this report, not in the sheet ──
-  { kind: 'count',   label: 'Initials', added: true,
+  { band: 'added',     kind: 'count', label: 'Initials',
     title: 'ADDED: initial consultations logged. The honest denominator for the prepay rates — the sheet has no such column.',
     get: (r) => r.initials },
-  { kind: 'metric',  label: 'TP Documented', suffix: '%', added: true,
+  { band: 'added',     kind: 'metric', label: 'TP Documented', suffix: '%',
     title: 'ADDED: treatment plans documented. A KPI with a 100% target in the dictionary that the sheet tracks nowhere.',
     get: (r) => r.tpDocumented },
-  { kind: 'count',   label: 'Cxl events', added: true,
+  { band: 'added',     kind: 'count', label: 'Cxl events',
     title: 'ADDED: cancellation events, per cancelled appointment date. One entry with three cancelled dates is three events.',
     get: (r) => r.cancellations },
-  { kind: 'count',   label: 'Churns', added: true,
+  { band: 'added',     kind: 'count', label: 'Churns',
     title: 'ADDED: churns per patient, on their last cancelled date. A reschedule keeps a future booking, so it is not a churn.',
     get: (r) => r.churns },
 ]
 
 /** Index of the first added column — where the divider goes. */
-const FIRST_ADDED = COLUMNS.findIndex((c) => 'added' in c && c.added)
+/**
+ * Contiguous runs of the same band, for the grouped header row. Derived rather
+ * than hand-listed so a column can never end up under the wrong band label.
+ */
+const BAND_RUNS: { band: Band; span: number }[] = COLUMNS.reduce<{ band: Band; span: number }[]>(
+  (runs, c) => {
+    const last = runs[runs.length - 1]
+    if (last && last.band === c.band) last.span += 1
+    else runs.push({ band: c.band, span: 1 })
+    return runs
+  },
+  []
+)
+
+/** A band boundary gets a divider, so the eye finds the groups without counting. */
+const isBandStart = (i: number) => i > 0 && COLUMNS[i - 1].band !== COLUMNS[i].band
 
 function fmt(m: Metric, suffix = ''): string {
   if (m.value === null) return '—'
@@ -305,10 +338,12 @@ function StatsRow({ r, isTeam, editing, draft, onEdit, onCommit }: StatsRowProps
         {r.clinicianName}
       </td>
       {COLUMNS.map((c, i) => {
-        // Divider marks where the sheet's own columns end and this report's
-        // additions begin.
-        const extra: React.CSSProperties =
-          i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}
+        // Band tint + a divider at each band boundary. The tint is on the cell,
+        // not the row, so a band reads as a vertical column of related figures.
+        const extra: React.CSSProperties = {
+          background: isTeam ? undefined : BANDS[c.band].tint,
+          ...(isBandStart(i) ? { borderLeft: `2px solid ${BORDER}` } : {}),
+        }
 
         if (c.kind === 'manual') {
           if (canEdit) {
@@ -644,12 +679,6 @@ export default function PractitionerStatsPage() {
           }}>
             <span style={{ fontSize: 10 }}>⚠</span>Not entered yet, or an impossible value — hover for why
           </span>
-          <span style={{
-            fontSize: 11.5, fontWeight: 600, color: TEXT_MUTE,
-            fontFamily: "'DM Sans', sans-serif", fontStyle: 'italic',
-          }}>
-            Italic = added here, not in the spreadsheet
-          </span>
         </div>
 
         {error && (
@@ -691,12 +720,102 @@ export default function PractitionerStatsPage() {
               </span>
             </div>
 
+            {/* Team headline before the detail. The Team row is the last line of a
+                13-column scroller, which is the worst place for the figure most
+                often wanted first. */}
+            <div className="pw-grid-2" style={{
+              display: 'grid', gap: 10, marginBottom: 12,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))',
+            }}>
+              {([
+                { label: 'Total appts', m: week.team.totalAppts,     suffix: ''  },
+                { label: 'Occupancy',   m: week.team.occupancy,      suffix: '%' },
+                { label: 'Case accept', m: week.team.caseAcceptance, suffix: '%' },
+                { label: 'Cancellation', m: week.team.cancellationPct, suffix: '%' },
+              ] as const).map((t) => {
+                const z = t.m.zone ? ZONE[t.m.zone] : null
+                return (
+                  <div key={t.label} style={{
+                    background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
+                    padding: '12px 14px', position: 'relative', overflow: 'hidden',
+                    display: 'flex', flexDirection: 'column', gap: 6,
+                  }}>
+                    <span style={{
+                      position: 'absolute', inset: '0 auto 0 0', width: 3,
+                      background: z ? z.fg : BORDER,
+                    }} />
+                    <div style={{
+                      fontSize: 10, fontWeight: 700, letterSpacing: '0.07em',
+                      textTransform: 'uppercase', color: TEXT_SOFT,
+                      fontFamily: "'DM Sans', sans-serif",
+                    }}>
+                      {t.label} · team
+                    </div>
+                    <div style={{
+                      fontFamily: "'DM Mono', ui-monospace, monospace",
+                      fontSize: 23, fontWeight: 600, lineHeight: 1,
+                      fontVariantNumeric: 'tabular-nums',
+                      color: t.m.value === null ? TEXT_MUTE : TEXT,
+                    }}>
+                      {t.m.value === null ? '—' : `${t.m.value}${t.suffix}`}
+                    </div>
+                    {z ? (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                        fontSize: 11, fontWeight: 650, color: z.fg, background: z.bg,
+                        padding: '2px 7px', borderRadius: 4, width: 'fit-content',
+                        fontFamily: "'DM Sans', sans-serif",
+                      }}>
+                        <span style={{ fontSize: 9 }}>{z.glyph}</span>{z.label}
+                      </span>
+                    ) : (
+                      <span style={{
+                        fontSize: 11, color: TEXT_MUTE,
+                        fontFamily: "'DM Sans', sans-serif",
+                      }}>
+                        {t.m.value === null ? 'no data' : 'no target band'}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
             <div style={{
               background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
               overflowX: 'auto',
             }}>
               <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040 }}>
                 <thead>
+                  {/* Band row: names the groups the SOP order already implies,
+                      so 13 columns scan as 5 things instead of 13. */}
+                  <tr>
+                    <th
+                      aria-hidden="true"
+                      style={{
+                        ...thBase, background: '#fff', borderBottom: 'none',
+                        position: 'sticky', left: 0, zIndex: 3,
+                        borderRight: `1px solid ${BORDER}`,
+                      }}
+                    />
+                    {BAND_RUNS.map(({ band, span }) => (
+                      <th
+                        key={band}
+                        colSpan={span}
+                        style={{
+                          ...thBase,
+                          textAlign: 'center',
+                          background: BANDS[band].tint,
+                          color: BANDS[band].ink,
+                          borderLeft: `2px solid ${BORDER}`,
+                          borderBottom: `1px solid ${BORDER}`,
+                          fontSize: 10,
+                        }}
+                      >
+                        {BANDS[band].label}
+                      </th>
+                    ))}
+                  </tr>
                   <tr>
                     {/* Same label as the sheet's first column, not "Practitioner". */}
                     <th style={{
@@ -711,11 +830,11 @@ export default function PractitionerStatsPage() {
                         title={c.title}
                         style={{
                           ...thBase,
-                          ...(i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}),
-                          // Hand-entered columns are tinted so it is obvious which
-                          // three still need a human to read them off Nookal.
-                          ...(c.kind === 'manual' ? { color: BLOCKED_FG, background: BLOCKED_BG } : {}),
-                          ...('added' in c && c.added ? { fontStyle: 'italic' } : {}),
+                          background: BANDS[c.band].tint,
+                          ...(isBandStart(i) ? { borderLeft: `2px solid ${BORDER}` } : {}),
+                          // Italic marks the four columns this report adds, so they
+                          // are never mistaken for the spreadsheet's own.
+                          ...(c.band === 'added' ? { fontStyle: 'italic' } : {}),
                         }}
                       >
                         {c.label}
@@ -739,30 +858,6 @@ export default function PractitionerStatsPage() {
               </table>
             </div>
 
-            {report && report.notes.length > 0 && (
-              <div style={{
-                marginTop: 14, background: '#fff', border: `1px solid ${BORDER}`,
-                borderRadius: 10, padding: '13px 16px',
-              }}>
-                <div style={{
-                  fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
-                  textTransform: 'uppercase', color: TEXT_SOFT, marginBottom: 8,
-                  fontFamily: "'DM Sans', sans-serif",
-                }}>
-                  How these figures are calculated
-                </div>
-                <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 5 }}>
-                  {report.notes.map((n, i) => (
-                    <li key={i} style={{
-                      fontSize: 12.5, color: TEXT_SOFT, lineHeight: 1.5,
-                      fontFamily: "'DM Sans', sans-serif",
-                    }}>
-                      {n}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </>
         )}
       </div>
