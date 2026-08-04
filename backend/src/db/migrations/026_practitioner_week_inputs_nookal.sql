@@ -24,9 +24,20 @@ ALTER TABLE practitioner_week_inputs
 ALTER TABLE practitioner_week_inputs
   ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
 
-ALTER TABLE practitioner_week_inputs
-  ADD CONSTRAINT pwi_cancelled_nonneg
-  CHECK (cancelled_count IS NULL OR cancelled_count >= 0);
+-- Postgres has no ADD CONSTRAINT IF NOT EXISTS, and re-running a migration must
+-- be harmless, so guard on pg_constraint. Same pattern as migration 009.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'pwi_cancelled_nonneg'
+       AND conrelid = 'practitioner_week_inputs'::regclass
+  ) THEN
+    ALTER TABLE practitioner_week_inputs
+      ADD CONSTRAINT pwi_cancelled_nonneg
+      CHECK (cancelled_count IS NULL OR cancelled_count >= 0);
+  END IF;
+END $$;
 
 COMMENT ON COLUMN practitioner_week_inputs.cancelled_count IS
   'Nookal v3 appointments with status = Cancelled for this practitioner-week. Includes rescheduled ones, unlike the spreadsheet figure — see migration 026.';
