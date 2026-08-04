@@ -191,6 +191,89 @@ const thBase: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
+/**
+ * Blocking overlay for the duration of a sync.
+ *
+ * A sync pulls a whole month of Nookal appointments — measured at 3,572 records
+ * and 30+ seconds. Without a modal the page looks frozen and the natural reaction
+ * is to click Sync again, which starts a second month-long fetch. So this states
+ * what is happening, that it is slow on purpose, and that leaving is safe.
+ *
+ * Matches the ConfirmDialog overlay (same scrim, radius and animation) so it does
+ * not read as a different app.
+ */
+function SyncOverlay({ period }: { period: string }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sync-title"
+      aria-busy="true"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9000,
+        background: 'rgba(15, 23, 42, 0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+        animation: 'psFadeIn 0.12s ease',
+      }}
+    >
+      <style>{`
+        @keyframes psFadeIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes psPopIn  { from { opacity: 0; transform: translateY(6px) scale(0.97) } to { opacity: 1; transform: none } }
+        @keyframes psSpin   { to { transform: rotate(360deg) } }
+        @keyframes psPulse  { 0%,100% { opacity: 1 } 50% { opacity: 0.45 } }
+        /* A spinner is decoration; never animate it for someone who asked us not to. */
+        @media (prefers-reduced-motion: reduce) {
+          .ps-spin  { animation: none !important; border-top-color: ${TEAL} !important }
+          .ps-pulse { animation: none !important }
+        }
+      `}</style>
+
+      <div style={{
+        background: '#fff', borderRadius: 12,
+        width: '100%', maxWidth: 420,
+        boxShadow: '0 20px 50px rgba(0,0,0,0.20)',
+        animation: 'psPopIn 0.16s ease',
+        overflow: 'hidden',
+        fontFamily: "'DM Sans', sans-serif",
+        padding: '26px 26px 22px',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+        textAlign: 'center',
+      }}>
+        <div
+          className="ps-spin"
+          aria-hidden="true"
+          style={{
+            width: 38, height: 38, borderRadius: '50%',
+            border: `3px solid ${BORDER}`, borderTopColor: TEAL,
+            animation: 'psSpin 0.8s linear infinite',
+          }}
+        />
+        <div>
+          <div id="sync-title" style={{ fontSize: 16, fontWeight: 700, color: TEXT, letterSpacing: '-0.01em' }}>
+            Syncing Nookal — please wait
+          </div>
+          <div className="ps-pulse" style={{
+            marginTop: 5, fontSize: 13, color: TEXT_SOFT,
+            animation: 'psPulse 1.6s ease-in-out infinite',
+          }}>
+            Reading {period} appointments…
+          </div>
+        </div>
+        <div style={{
+          fontSize: 12, color: TEXT_MUTE, lineHeight: 1.55,
+          borderTop: `1px solid ${BORDER}`, paddingTop: 12, width: '100%',
+        }}>
+          A whole month is a few thousand appointments, so this takes around
+          <strong style={{ color: TEXT_SOFT }}> 30 seconds</strong>. Please do not
+          press Sync again. Your figures are saved as they are written, so closing
+          this page will not lose what has already come through.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type DraftRow = Partial<Record<ManualField, string>>
 
 interface StatsRowProps {
@@ -413,6 +496,7 @@ export default function PractitionerStatsPage() {
 
   return (
     <AppShell>
+      {syncing && <SyncOverlay period={`${MONTHS[month - 1]} ${year}`} />}
       <div className="pw-page" style={{ padding: '20px 28px' }}>
 
         <div style={{ marginBottom: 16 }}>
