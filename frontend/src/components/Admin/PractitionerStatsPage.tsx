@@ -4,6 +4,7 @@ import {
   PractitionerStatsReport,
   PractitionerWeekStats,
   Metric,
+  UnavailableMetric,
   Zone,
 } from '../../api/practitionerStats.api'
 import { ClinicId, CLINIC_LABEL } from '../../types'
@@ -39,25 +40,80 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
-/** Columns the backend cannot fill yet. Rendered, not hidden — a missing KPI
- *  the CEO expects to see must read as "blocked", never as an empty cell. */
-const BLOCKED_COLS: { key: keyof PractitionerWeekStats; label: string }[] = [
-  { key: 'totalAppts',      label: 'Total appts' },
-  { key: 'occupancy',       label: 'Occupancy'   },
-  { key: 'newCases',        label: 'NC'          },
-  { key: 'cancellationPct', label: 'Cxl %'       },
+/**
+ * Column spec — header and body both render from this one list, so the two can
+ * never drift out of order.
+ *
+ * The first ten entries are the Practitioner Stats 2026 tab's own columns, in
+ * its own order, under its own labels, verified against all ten week blocks in
+ * the sheet:
+ *
+ *   Therapist | Total Appts | Occupancy | NC | Recommendations | Conversion |
+ *   Case Acceptance | Cancellation % | Prepay % | Prepay Acceptance%
+ *
+ * Renaming or reordering them would break the weekly cross-check against the
+ * spreadsheet this report is meant to replace. Where the sheet is inconsistent
+ * with itself the clearer form is used: "Case Acceptance" (4 blocks) over "Case
+ * Accept" (6), and "Prepay %" (8 blocks) over "Prepay Offered%" (2).
+ *
+ * Columns this report ADDS come last, after a divider, so nothing the CEO
+ * already reads shifts position.
+ */
+type Col =
+  | { kind: 'metric';  label: string; title: string; get: (r: PractitionerWeekStats) => Metric; suffix?: string; added?: boolean }
+  | { kind: 'count';   label: string; title: string; get: (r: PractitionerWeekStats) => number; added?: boolean }
+  | { kind: 'blocked'; label: string; get: (r: PractitionerWeekStats) => UnavailableMetric }
+
+const COLUMNS: Col[] = [
+  // ── the sheet's columns, in the sheet's order ──
+  { kind: 'blocked', label: 'Total Appts', get: (r) => r.totalAppts },
+  { kind: 'blocked', label: 'Occupancy',   get: (r) => r.occupancy  },
+  { kind: 'blocked', label: 'NC',          get: (r) => r.newCases   },
+  { kind: 'metric',  label: 'Recommendations', suffix: '',
+    title: 'Average treatment-plan recommendations per initial consult. Target 8–12.',
+    get: (r) => r.recommendations },
+  { kind: 'metric',  label: 'Conversion',
+    title: 'Average appointments booked from initial. Target >6.',
+    get: (r) => r.conversion },
+  { kind: 'metric',  label: 'Case Acceptance', suffix: '%',
+    title: 'Pooled: sum booked ÷ sum recommendations, per the KPI dictionary. Target >80%. The sheet averages per-patient percentages instead and can differ by 17 points.',
+    get: (r) => r.caseAcceptance },
+  { kind: 'blocked', label: 'Cancellation %', get: (r) => r.cancellationPct },
+  { kind: 'metric',  label: 'Prepay %', suffix: '%',
+    title: 'Prepay offered ÷ initial consults. Target 100%. The sheet divides by NC, which is how it produced 125%. No zone band — the KPI dictionary defines none.',
+    get: (r) => r.prepayOfferedPct },
+  { kind: 'metric',  label: 'Prepay Acceptance%', suffix: '%',
+    title: 'Prepay accepted ÷ prepay offered. Target 80%. Blank when nothing was offered. No zone band — the KPI dictionary defines none.',
+    get: (r) => r.prepayAcceptedPct },
+
+  // ── added by this report, not in the sheet ──
+  { kind: 'count',   label: 'Initials', added: true,
+    title: 'ADDED: initial consultations logged. The honest denominator for the prepay rates — the sheet has no such column.',
+    get: (r) => r.initials },
+  { kind: 'metric',  label: 'TP Documented', suffix: '%', added: true,
+    title: 'ADDED: treatment plans documented. A KPI with a 100% target in the dictionary that the sheet tracks nowhere.',
+    get: (r) => r.tpDocumented },
+  { kind: 'count',   label: 'Cxl events', added: true,
+    title: 'ADDED: cancellation events, per cancelled appointment date. One entry with three cancelled dates is three events.',
+    get: (r) => r.cancellations },
+  { kind: 'count',   label: 'Churns', added: true,
+    title: 'ADDED: churns per patient, on their last cancelled date. A reschedule keeps a future booking, so it is not a churn.',
+    get: (r) => r.churns },
 ]
+
+/** Index of the first added column — where the divider goes. */
+const FIRST_ADDED = COLUMNS.findIndex((c) => 'added' in c && c.added)
 
 function fmt(m: Metric, suffix = ''): string {
   if (m.value === null) return '—'
   return `${m.value}${suffix}`
 }
 
-function ZoneCell({ m, suffix = '' }: { m: Metric; suffix?: string }) {
+function ZoneCell({ m, suffix = '', extra }: { m: Metric; suffix?: string; extra?: React.CSSProperties }) {
   // No figure at all — nothing was logged.
   if (m.value === null) {
     return (
-      <td style={{ ...cellBase, color: TEXT_MUTE, fontWeight: 400 }} title="No data logged for this week">
+      <td style={{ ...cellBase, ...extra, color: TEXT_MUTE, fontWeight: 400 }} title="No data logged for this week">
         —
       </td>
     )
@@ -65,11 +121,11 @@ function ZoneCell({ m, suffix = '' }: { m: Metric; suffix?: string }) {
   // A real figure the KPI dictionary sets no target band for (the prepay rates).
   // Render the number plainly — never swallow it just because there is no zone.
   if (!m.zone) {
-    return <td style={cellBase}>{fmt(m, suffix)}</td>
+    return <td style={{ ...cellBase, ...extra }}>{fmt(m, suffix)}</td>
   }
   const z = ZONE[m.zone]
   return (
-    <td style={cellBase}>
+    <td style={{ ...cellBase, ...extra }}>
       <span
         title={z.label}
         style={{
@@ -126,28 +182,29 @@ function StatsRow({ r, isTeam }: { r: PractitionerWeekStats; isTeam?: boolean })
       >
         {r.clinicianName}
       </td>
-      {/* A genuine zero is printed as 0, never as an em dash — conflating "none"
-          with "not recorded" is the exact defect this board exists to remove. */}
-      <td style={cellBase}>{r.initials}</td>
-      <ZoneCell m={r.recommendations} />
-      <ZoneCell m={r.conversion} />
-      <ZoneCell m={r.caseAcceptance}   suffix="%" />
-      <ZoneCell m={r.tpDocumented}     suffix="%" />
-      <ZoneCell m={r.prepayOfferedPct}  suffix="%" />
-      <ZoneCell m={r.prepayAcceptedPct} suffix="%" />
-      <td style={cellBase}>{r.cancellations}</td>
-      <td style={cellBase}>{r.churns}</td>
-      {BLOCKED_COLS.map((c) => {
-        const cell = r[c.key] as { reason: string }
-        return (
-          <td
-            key={c.key}
-            style={{ ...cellBase, color: BLOCKED_FG, background: BLOCKED_BG, opacity: 0.85 }}
-            title={cell.reason}
-          >
-            ⚠
-          </td>
-        )
+      {COLUMNS.map((c, i) => {
+        // Divider marks where the sheet's own columns end and this report's
+        // additions begin.
+        const extra: React.CSSProperties =
+          i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}
+
+        if (c.kind === 'blocked') {
+          return (
+            <td
+              key={c.label}
+              style={{ ...cellBase, ...extra, color: BLOCKED_FG, background: BLOCKED_BG, opacity: 0.85 }}
+              title={c.get(r).reason}
+            >
+              ⚠
+            </td>
+          )
+        }
+        if (c.kind === 'count') {
+          // A genuine zero prints as 0, never as an em dash — conflating "none"
+          // with "not recorded" is the exact defect this board exists to remove.
+          return <td key={c.label} style={{ ...cellBase, ...extra }}>{c.get(r)}</td>
+        }
+        return <ZoneCell key={c.label} m={c.get(r)} suffix={c.suffix} extra={extra} />
       })}
     </tr>
   )
@@ -305,6 +362,12 @@ export default function PractitionerStatsPage() {
           }}>
             <span style={{ fontSize: 10 }}>⚠</span>Needs Nookal data — hover for why
           </span>
+          <span style={{
+            fontSize: 11.5, fontWeight: 600, color: TEXT_MUTE,
+            fontFamily: "'DM Sans', sans-serif", fontStyle: 'italic',
+          }}>
+            Italic = added here, not in the spreadsheet
+          </span>
         </div>
 
         {error && (
@@ -342,23 +405,24 @@ export default function PractitionerStatsPage() {
               <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1040 }}>
                 <thead>
                   <tr>
+                    {/* Same label as the sheet's first column, not "Practitioner". */}
                     <th style={{
                       ...thBase, textAlign: 'left', position: 'sticky', left: 0, zIndex: 2,
                       borderRight: `1px solid ${BORDER}`,
                     }}>
-                      Practitioner
+                      Therapist
                     </th>
-                    <th style={thBase} title="Initial consultations logged — the prepay denominator">Initials</th>
-                    <th style={thBase} title="Average treatment-plan recommendations. Target 8–12.">Recs</th>
-                    <th style={thBase} title="Average appointments booked from initial. Target >6.">Conv</th>
-                    <th style={thBase} title="Pooled: sum booked ÷ sum recommendations. Target >80%.">Case acc</th>
-                    <th style={thBase} title="Treatment plans documented. Target 100%.">TP doc</th>
-                    <th style={thBase} title="Prepay offered ÷ initial consults. Target 100%. No zone band — the KPI dictionary defines none.">Prepay off</th>
-                    <th style={thBase} title="Prepay accepted ÷ prepay offered. Target 80%. Blank when nothing was offered. No zone band — the KPI dictionary defines none.">Prepay acc</th>
-                    <th style={thBase} title="Cancellation events, counted per cancelled appointment date and bucketed on that date — one entry with three cancelled dates is three events.">Cxl</th>
-                    <th style={thBase} title="Churns, counted per patient (not per event) and bucketed on their last cancelled date. A reschedule keeps a future booking, so it is not a churn.">Churns</th>
-                    {BLOCKED_COLS.map((c) => (
-                      <th key={c.key} style={{ ...thBase, color: BLOCKED_FG, background: BLOCKED_BG }}>
+                    {COLUMNS.map((c, i) => (
+                      <th
+                        key={c.label}
+                        title={c.kind === 'blocked' ? undefined : c.title}
+                        style={{
+                          ...thBase,
+                          ...(i === FIRST_ADDED ? { borderLeft: `2px solid ${BORDER}` } : {}),
+                          ...(c.kind === 'blocked' ? { color: BLOCKED_FG, background: BLOCKED_BG } : {}),
+                          ...('added' in c && c.added ? { fontStyle: 'italic' } : {}),
+                        }}
+                      >
                         {c.label}
                       </th>
                     ))}
