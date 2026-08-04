@@ -192,10 +192,23 @@ function toStats(
   clinicId:      string | null,
   c:             Counters
 ): PractitionerWeekStats {
-  // AVG denominators exclude rows with no treatment plan (recommendations = 0).
-  // See PractitionerDayRow.rows_with_recs for why.
-  const recsAvg   = c.rowsWithRecs > 0 ? round2(c.sumRecs   / c.rowsWithRecs) : null;
-  const convAvg   = c.rowsWithRecs > 0 ? round2(c.sumBooked / c.rowsWithRecs) : null;
+  // AVG denominator is EVERY initial consult, including those that received no
+  // treatment plan (recommendations = 0).
+  //
+  // Verified against the spreadsheet for June 2026 Week 1: dividing by all rows
+  // reproduces its Recommendations figure exactly for 8 of 10 practitioners
+  // (Angus 6.67, Ben 6.17, Caitlin 3.67, Emma 7.00, Gabriella 5.67, Isabella
+  // 11.00, Jervis 9.50, Noah 3.50), while excluding the zero rows does not.
+  //
+  // An earlier pass excluded them on the theory that Sheets' AVG skips blanks.
+  // It does — but those cells hold a literal 0, not a blank, so they are in the
+  // average. The KPI dictionary agrees with the sheet here: Recommendations
+  // measures "how many patients are provided with clear treatment plans", so a
+  // patient who got no plan should pull the figure down rather than vanish.
+  // rowsWithRecs stays on the row for reference; tpDocumented is what surfaces
+  // the plan rate.
+  const recsAvg   = c.initials > 0 ? round2(c.sumRecs   / c.initials) : null;
+  const convAvg   = c.initials > 0 ? round2(c.sumBooked / c.initials) : null;
   const casePct   = c.sumRecs > 0 ? round2((c.sumBooked / c.sumRecs) * 100) : null;
   const tpTotal   = c.tpYes + c.tpNo;
   const tpPct     = tpTotal > 0 ? round2((c.tpYes / tpTotal) * 100) : null;
@@ -316,7 +329,7 @@ export const practitionerStatsService = {
         `Occupancy specifically: ${NOT_AVAILABLE.occupancy}`,
         'Case Acceptance is pooled (sum booked ÷ sum recommendations), per the KPI dictionary. The spreadsheet averages per-patient percentages and can differ by up to 12 points.',
         'Prepay % uses initial consultations as its denominator, not NC. The spreadsheet divides by NC, which is what produced its 125% value.',
-        'Recommendations and Conversion averages exclude rows with no treatment plan, matching the blank cells the spreadsheet skips. See the Treatment Plans column for how many were excluded.',
+        'Recommendations and Conversion average over every initial consult, including those with no treatment plan. Verified against the spreadsheet for June 2026 Week 1 — this reproduces its figures; excluding the zero rows does not.',
         'Cancellations count events per cancelled appointment date (one dropout entry can hold several), bucketed on the cancelled date rather than the day it was keyed. Churns count patients, on their last cancelled date.',
         'Prepay % and Prepay Acceptance % carry no zone colour: the KPI dictionary defines bare targets (100% / 80%) but no Refining band, and an invented boundary would be indistinguishable on screen from a documented one.',
       ],

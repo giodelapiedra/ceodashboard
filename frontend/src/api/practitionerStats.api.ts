@@ -62,7 +62,11 @@ export const practitionerStatsApi = {
     month:    number,
     clinicId?: ClinicId
   ): Promise<PractitionerStatsReport> {
-    const { data } = await api.get<PractitionerStatsReport>('/practitioner-stats', {
+    // The shared axios instance has no baseURL, so every path carries its own
+    // /api prefix — that is also what the vite dev server proxies. Without it the
+    // dev server answers with index.html at status 200 and the caller gets HTML
+    // where it expected JSON.
+    const { data } = await api.get<PractitionerStatsReport>('/api/practitioner-stats', {
       params: { year, month, ...(clinicId ? { clinic_id: clinicId } : {}) },
     });
     return data;

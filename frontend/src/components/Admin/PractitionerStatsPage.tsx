@@ -170,6 +170,12 @@ export default function PractitionerStatsPage() {
       const data = await practitionerStatsApi.get(
         year, month, tab === 'overall' ? undefined : tab
       )
+      // The axios generic is a promise, not a check — a misrouted request can
+      // resolve 200 with an HTML body and no `weeks` at all. Verify the shape
+      // before trusting it rather than throwing deep inside the render.
+      if (!data || !Array.isArray(data.weeks)) {
+        throw new Error('Unexpected response from /api/practitioner-stats')
+      }
       setReport(data)
       // A month has 4 weeks plus a remainder that is often empty — the
       // calculator marks an empty one with a 9999-12-31 range. Clamp against the
