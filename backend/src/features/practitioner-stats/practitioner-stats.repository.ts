@@ -41,15 +41,22 @@ export interface CancellationDayRow {
   clinic_id:    string;
   day:          string;   // YYYY-MM-DD
   /**
-   * Every dropout row logged that day — the Cancellation stat per Sam's
-   * guideline (a reschedule outside the week still counts as a cancellation
-   * event).
+   * Cancellation EVENTS, not dropout rows. patient_dropouts stores
+   * appointment_cancelled_dates as a DATE[] because one patient can cancel
+   * several appointments before being logged once (migration 009), so a row
+   * with three dates is three cancellation events. Each event is bucketed on
+   * its own cancelled-appointment date — the SOP counts cancellations by when
+   * the appointment was cancelled, not by when front desk keyed the entry.
    */
   cancellations: number;
   /**
-   * The subset that is also a churn: the patient has no future booking left.
-   * Maps 1:1 onto Sam's SOP rules via the status vocabulary —
-   * 'Re-scheduled' keeps a booking, so it is a cancellation but NOT a churn.
+   * Churns, counted per ENTRY rather than per event: churn is a property of the
+   * patient (no future booking left), so three cancelled appointments by one
+   * patient is still one churn. Bucketed on the LAST cancelled date, which is
+   * when the patient actually stopped.
+   *
+   * Maps 1:1 onto Sam's SOP rules via the status vocabulary — 'Re-scheduled'
+   * keeps a future booking, so it is a cancellation event but NOT a churn.
    */
   churns: number;
 }
@@ -133,40 +140,77 @@ export const practitionerStatsRepository = {
     }));
   },
 
-  /** Dropout side: the cancellation numerator, split into churn / not-churn. */
+  /**
+   * Dropout side: the cancellation numerator, split into events and churns.
+   *
+   * Two queries because the two metrics have different grains — events are per
+   * cancelled appointment date, churns are per patient — and bucketing them on
+   * the same day column would double-count one and misdate the other. Merged
+   * here so the service still sees one row per (clinician, day).
+   */
   async cancellationsByDay(
     dateFrom: string,
     dateTo:   string,
     clinicId: string | null
   ): Promise<CancellationDayRow[]> {
-    const { rows } = await query<{
-      clinician_id:  string;
-      clinic_id:     string;
-      day:           Date;
-      cancellations: string;
-      churns:        string;
-    }>(
-      `SELECT
-         d.clinician_id,
-         d.clinic_id,
-         d.date_logged::date                                     AS day,
-         COUNT(*)::bigint                                        AS cancellations,
-         COUNT(*) FILTER (WHERE d.status = ANY($4::text[]))::bigint AS churns
-       FROM patient_dropouts d
-       WHERE d.date_logged >= $1::date
-         AND d.date_logged <= $2::date
-         AND ($3::text IS NULL OR d.clinic_id = $3)
-       GROUP BY d.clinician_id, d.clinic_id, d.date_logged::date`,
-      [dateFrom, dateTo, clinicId, CHURN_STATUSES]
-    );
+    // An entry with no recorded cancelled dates falls back to date_logged, so a
+    // sparsely-filled row still registers as one event rather than vanishing.
+    const EFFECTIVE_DATES = `
+      CASE WHEN cardinality(d.appointment_cancelled_dates) > 0
+           THEN d.appointment_cancelled_dates
+           ELSE ARRAY[d.date_logged] END
+    `;
 
-    return rows.map((r) => ({
-      clinician_id:  r.clinician_id,
-      clinic_id:     r.clinic_id,
-      day:           isoDay(r.day),
-      cancellations: Number(r.cancellations),
-      churns:        Number(r.churns),
-    }));
+    const [events, churns] = await Promise.all([
+      query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
+        `SELECT d.clinician_id, d.clinic_id, cd::date AS day, COUNT(*)::bigint AS n
+           FROM patient_dropouts d
+           CROSS JOIN LATERAL unnest(${EFFECTIVE_DATES}) AS cd
+          WHERE cd >= $1::date
+            AND cd <= $2::date
+            AND ($3::text IS NULL OR d.clinic_id = $3)
+          GROUP BY d.clinician_id, d.clinic_id, cd::date`,
+        [dateFrom, dateTo, clinicId]
+      ),
+      query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
+        `SELECT d.clinician_id, d.clinic_id, last_cd::date AS day, COUNT(*)::bigint AS n
+           FROM patient_dropouts d
+           CROSS JOIN LATERAL (
+             SELECT MAX(cd) AS last_cd FROM unnest(${EFFECTIVE_DATES}) AS cd
+           ) AS agg
+          WHERE d.status = ANY($4::text[])
+            AND agg.last_cd >= $1::date
+            AND agg.last_cd <= $2::date
+            AND ($3::text IS NULL OR d.clinic_id = $3)
+          GROUP BY d.clinician_id, d.clinic_id, last_cd::date`,
+        [dateFrom, dateTo, clinicId, CHURN_STATUSES]
+      ),
+    ]);
+
+    const merged = new Map<string, CancellationDayRow>();
+    const slot = (clinicianId: string, clinicIdVal: string, day: string): CancellationDayRow => {
+      const key = `${clinicianId}|${day}`;
+      let row = merged.get(key);
+      if (!row) {
+        merged.set(key, row = {
+          clinician_id:  clinicianId,
+          clinic_id:     clinicIdVal,
+          day,
+          cancellations: 0,
+          churns:        0,
+        });
+      }
+      return row;
+    };
+
+    for (const r of events.rows) {
+      slot(r.clinician_id, r.clinic_id, isoDay(r.day)).cancellations += Number(r.n);
+    }
+    for (const r of churns.rows) {
+      slot(r.clinician_id, r.clinic_id, isoDay(r.day)).churns += Number(r.n);
+    }
+
+    return [...merged.values()];
   },
 
   /**

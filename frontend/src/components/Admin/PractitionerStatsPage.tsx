@@ -54,12 +54,18 @@ function fmt(m: Metric, suffix = ''): string {
 }
 
 function ZoneCell({ m, suffix = '' }: { m: Metric; suffix?: string }) {
-  if (m.value === null || !m.zone) {
+  // No figure at all — nothing was logged.
+  if (m.value === null) {
     return (
       <td style={{ ...cellBase, color: TEXT_MUTE, fontWeight: 400 }} title="No data logged for this week">
         —
       </td>
     )
+  }
+  // A real figure the KPI dictionary sets no target band for (the prepay rates).
+  // Render the number plainly — never swallow it just because there is no zone.
+  if (!m.zone) {
+    return <td style={cellBase}>{fmt(m, suffix)}</td>
   }
   const z = ZONE[m.zone]
   return (
@@ -120,15 +126,17 @@ function StatsRow({ r, isTeam }: { r: PractitionerWeekStats; isTeam?: boolean })
       >
         {r.clinicianName}
       </td>
-      <td style={cellBase}>{r.initials || '—'}</td>
+      {/* A genuine zero is printed as 0, never as an em dash — conflating "none"
+          with "not recorded" is the exact defect this board exists to remove. */}
+      <td style={cellBase}>{r.initials}</td>
       <ZoneCell m={r.recommendations} />
       <ZoneCell m={r.conversion} />
       <ZoneCell m={r.caseAcceptance}   suffix="%" />
       <ZoneCell m={r.tpDocumented}     suffix="%" />
       <ZoneCell m={r.prepayOfferedPct}  suffix="%" />
       <ZoneCell m={r.prepayAcceptedPct} suffix="%" />
-      <td style={cellBase}>{r.cancellations || '—'}</td>
-      <td style={cellBase}>{r.churns || '—'}</td>
+      <td style={cellBase}>{r.cancellations}</td>
+      <td style={cellBase}>{r.churns}</td>
       {BLOCKED_COLS.map((c) => {
         const cell = r[c.key] as { reason: string }
         return (
@@ -163,9 +171,13 @@ export default function PractitionerStatsPage() {
         year, month, tab === 'overall' ? undefined : tab
       )
       setReport(data)
-      // A month has 4 weeks plus an optional remainder; clamp so switching
-      // months never leaves the tab pointing past the end.
-      setWeekIdx((i) => Math.min(i, Math.max(data.weeks.length - 1, 0)))
+      // A month has 4 weeks plus a remainder that is often empty — the
+      // calculator marks an empty one with a 9999-12-31 range. Clamp against the
+      // SELECTABLE count, not weeks.length (always 5): coming from a month that
+      // had a real remainder would otherwise leave the tab parked on the empty
+      // sentinel, showing an all-zero week with no button highlighted.
+      const selectable = data.weeks.filter((w) => w.dateFrom !== '9999-12-31').length
+      setWeekIdx((i) => Math.min(i, Math.max(selectable - 1, 0)))
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load practitioner stats'
       setError(msg)
@@ -335,10 +347,10 @@ export default function PractitionerStatsPage() {
                     <th style={thBase} title="Average appointments booked from initial. Target >6.">Conv</th>
                     <th style={thBase} title="Pooled: sum booked ÷ sum recommendations. Target >80%.">Case acc</th>
                     <th style={thBase} title="Treatment plans documented. Target 100%.">TP doc</th>
-                    <th style={thBase} title="Prepay offered ÷ initial consults">Prepay off</th>
-                    <th style={thBase} title="Prepay accepted ÷ prepay offered. Blank when nothing was offered.">Prepay acc</th>
-                    <th style={thBase} title="Dropout entries logged — cancellation events">Cxl</th>
-                    <th style={thBase} title="Cancellations that left no future booking">Churns</th>
+                    <th style={thBase} title="Prepay offered ÷ initial consults. Target 100%. No zone band — the KPI dictionary defines none.">Prepay off</th>
+                    <th style={thBase} title="Prepay accepted ÷ prepay offered. Target 80%. Blank when nothing was offered. No zone band — the KPI dictionary defines none.">Prepay acc</th>
+                    <th style={thBase} title="Cancellation events, counted per cancelled appointment date and bucketed on that date — one entry with three cancelled dates is three events.">Cxl</th>
+                    <th style={thBase} title="Churns, counted per patient (not per event) and bucketed on their last cancelled date. A reschedule keeps a future booking, so it is not a churn.">Churns</th>
                     {BLOCKED_COLS.map((c) => (
                       <th key={c.key} style={{ ...thBase, color: BLOCKED_FG, background: BLOCKED_BG }}>
                         {c.label}

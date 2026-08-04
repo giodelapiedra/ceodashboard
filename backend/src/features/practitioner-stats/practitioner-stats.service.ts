@@ -123,6 +123,16 @@ function metric(value: number | null, zone: (v: number) => Zone): Metric {
   return { value, zone: zone(value) };
 }
 
+/**
+ * A real figure with no zone, for KPIs the dictionary sets no target band for.
+ * Deliberately not given invented thresholds — a made-up "refining" boundary
+ * would look identical to a documented one on screen.
+ */
+function plain(value: number | null): Metric {
+  if (value === null || !Number.isFinite(value)) return { value: null, zone: null };
+  return { value, zone: null };
+}
+
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // Recommendations: dictionary says 8–12 is the target band. The upper bound is
@@ -132,10 +142,10 @@ const zoneRecommendations = (v: number) => zoneHigher(v, 8, 6);
 const zoneConversion      = (v: number) => zoneHigher(v, 6, 5);
 const zoneCaseAcceptance  = (v: number) => zoneHigher(v, 80, 70);
 const zoneTpDocumented    = (v: number) => zoneHigher(v, 100, 80);
-// No target zone is defined for the prepay rates in the KPI dictionary; the
-// Prepayment tab's own summary uses 100% offer / 80% acceptance as targets.
-const zonePrepayOffered   = (v: number) => zoneHigher(v, 100, 50);
-const zonePrepayAccepted  = (v: number) => zoneHigher(v, 80, 50);
+// The prepay rates get NO zone. The KPI dictionary defines no bands for them —
+// the Prepayment tab only states bare targets (100% offer, 80% acceptance) with
+// nothing in between — so any three-way split would be invented. The targets are
+// surfaced in the column tooltips instead.
 
 // ── Aggregation ────────────────────────────────────────────────────────────
 
@@ -209,8 +219,8 @@ function toStats(
     conversion:        metric(convAvg,      zoneConversion),
     caseAcceptance:    metric(casePct,      zoneCaseAcceptance),
     tpDocumented:      metric(tpPct,        zoneTpDocumented),
-    prepayOfferedPct:  metric(prepayOffPct, zonePrepayOffered),
-    prepayAcceptedPct: metric(prepayAccPct, zonePrepayAccepted),
+    prepayOfferedPct:  plain(prepayOffPct),
+    prepayAcceptedPct: plain(prepayAccPct),
     cancellations:     c.cancellations,
     churns:            c.churns,
     totalAppts:      { value: null, zone: null, reason: NOT_AVAILABLE.totalAppts },
@@ -307,6 +317,8 @@ export const practitionerStatsService = {
         'Case Acceptance is pooled (sum booked ÷ sum recommendations), per the KPI dictionary. The spreadsheet averages per-patient percentages and can differ by up to 12 points.',
         'Prepay % uses initial consultations as its denominator, not NC. The spreadsheet divides by NC, which is what produced its 125% value.',
         'Recommendations and Conversion averages exclude rows with no treatment plan, matching the blank cells the spreadsheet skips. See the Treatment Plans column for how many were excluded.',
+        'Cancellations count events per cancelled appointment date (one dropout entry can hold several), bucketed on the cancelled date rather than the day it was keyed. Churns count patients, on their last cancelled date.',
+        'Prepay % and Prepay Acceptance % carry no zone colour: the KPI dictionary defines bare targets (100% / 80%) but no Refining band, and an invented boundary would be indistinguishable on screen from a documented one.',
       ],
     };
   },
