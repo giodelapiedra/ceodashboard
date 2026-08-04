@@ -71,6 +71,9 @@ export interface PractitionerStatsWeek {
   dateTo:   string;
   rows:     PractitionerWeekStats[];
   team:     PractitionerWeekStats;
+  /** Last Nookal sync covering this week, or null if never synced. The report
+   *  itself is read from Postgres — this says whether a sync is worth pressing. */
+  syncedAt: string | null;
 }
 
 export interface PractitionerStatsReport {

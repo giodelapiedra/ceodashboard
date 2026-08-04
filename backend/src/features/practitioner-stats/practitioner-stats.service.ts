@@ -82,6 +82,15 @@ export interface PractitionerStatsWeek {
   dateTo:   string;
   rows:     PractitionerWeekStats[];
   team:     PractitionerWeekStats;
+  /**
+   * Most recent Nookal sync covering this week, or null if never synced.
+   *
+   * The report itself is served from Postgres — pressing Sync is what talks to
+   * Nookal, and a read costs about 10-50ms against 30+ seconds for a sync. This
+   * timestamp is what tells the CEO whether a sync is actually needed, instead
+   * of pressing it every visit on the assumption the figures might be stale.
+   */
+  syncedAt: string | null;
 }
 
 export interface PractitionerStatsReport {
@@ -399,8 +408,10 @@ export const practitionerStatsService = {
       // Hand-entered figures are keyed by week number, not by date — the
       // Remainder column is stored as 5.
       const wkNum = w.weekNum === 'remainder' ? 5 : w.weekNum;
+      let syncedAt: string | null = null;
       for (const r of weekInputs) {
         if (r.week_num !== wkNum) continue;
+        if (r.synced_at && (!syncedAt || r.synced_at > syncedAt)) syncedAt = r.synced_at;
         // A figure for a clinician outside the current clinic filter must not
         // leak into this view's Team row.
         if (!byClinician.has(r.clinician_id) && !nameOf.has(r.clinician_id)) continue;
@@ -419,6 +430,7 @@ export const practitionerStatsService = {
         dateTo:   w.dateTo,
         rows,
         team:     toStats('team', 'Team', null, teamTotals),
+        syncedAt,
       };
     });
 

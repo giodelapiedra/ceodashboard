@@ -591,9 +591,20 @@ export default function PractitionerStatsPage() {
             <div style={{
               fontSize: 12.5, color: TEXT_SOFT, marginBottom: 8,
               fontFamily: "'DM Mono', ui-monospace, monospace",
+              display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline',
             }}>
-              {week.label} · {week.dateFrom} → {week.dateTo}
-              {tab !== 'overall' && ` · ${CLINIC_LABEL[tab]}`}
+              <span>
+                {week.label} · {week.dateFrom} → {week.dateTo}
+                {tab !== 'overall' && ` · ${CLINIC_LABEL[tab]}`}
+              </span>
+              {/* The figures are read from Postgres, so Sync is only worth
+                  pressing when Nookal has moved on. Saying when it last ran is
+                  what makes that judgeable instead of guesswork. */}
+              <span style={{ color: week.syncedAt ? TEXT_MUTE : BLOCKED_FG }}>
+                {week.syncedAt
+                  ? `· synced ${new Date(week.syncedAt).toLocaleString()}`
+                  : '· never synced — press Sync Nookal'}
+              </span>
             </div>
 
             <div style={{
