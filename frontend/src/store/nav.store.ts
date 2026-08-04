@@ -7,6 +7,7 @@ export type AppPage =
   | 'admin-dropouts'
   | 'admin-dropout-analytics'
   | 'admin-case-acceptance'
+  | 'admin-practitioner-stats'
   | 'admin-ad-leads'
   | 'admin-delete-requests'
   | 'admin-edit-requests'
@@ -28,6 +29,7 @@ export const PAGE_PATH: Record<AppPage, string> = {
   'admin-dropouts':            '/admin/dropouts',
   'admin-dropout-analytics':   '/admin/dropout-analytics',
   'admin-case-acceptance':     '/admin/case-acceptance',
+  'admin-practitioner-stats':  '/admin/practitioner-stats',
   'admin-ad-leads':            '/admin/ad-leads',
   'admin-delete-requests':     '/admin/delete-requests',
   'admin-edit-requests':       '/admin/edit-requests',

@@ -36,6 +36,9 @@ const NAV_TREE: Record<Role, NavItem[]> = {
       { page: 'admin-case-acceptance', label: 'Reports'          },
       { page: 'case-acceptance-entry', label: 'Manage entries'   },
     ]},
+    { kind: 'group', label: 'Clinical Impact', items: [
+      { page: 'admin-practitioner-stats', label: 'Practitioner Stats' },
+    ]},
     { kind: 'group', label: 'Ad Leads', items: [
       { page: 'admin-ad-leads',        label: 'Meta/Google Leads' },
     ]},

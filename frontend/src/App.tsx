@@ -12,6 +12,7 @@ import DropoutAdminPage from './components/Admin/DropoutAdminPage'
 import DropoutAnalyticsPage from './components/Admin/DropoutAnalyticsPage'
 import CEOAnalyticsPage from './components/Admin/CEOAnalyticsPage'
 import CaseAcceptanceAdminPage from './components/Admin/CaseAcceptanceAdminPage'
+import PractitionerStatsPage from './components/Admin/PractitionerStatsPage'
 import AuditLogPage from './components/Admin/AuditLogPage'
 import DropoutEntryPage from './components/Dropouts/DropoutEntryPage'
 import CaseAcceptanceEntryPage from './components/CaseAcceptance/CaseAcceptanceEntryPage'
@@ -145,6 +146,7 @@ export default function App() {
     else if (page === 'admin-dropout-analytics')  page_node = <DropoutAnalyticsPage />
     else if (page === 'admin-ceo-analytics')      page_node = <CEOAnalyticsPage />
     else if (page === 'admin-case-acceptance')    page_node = <CaseAcceptanceAdminPage />
+    else if (page === 'admin-practitioner-stats') page_node = <PractitionerStatsPage />
     else if (page === 'admin-ad-leads')           page_node = <AdLeadsEntryPage />
     else if (page === 'admin-delete-requests')    page_node = <DeleteRequestsPage />
     else if (page === 'admin-edit-requests')      page_node = <EditRequestsPage />
