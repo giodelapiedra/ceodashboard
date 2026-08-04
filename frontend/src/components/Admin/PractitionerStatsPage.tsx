@@ -287,6 +287,7 @@ export default function PractitionerStatsPage() {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
 
+  const [syncing, setSyncing] = useState(false)
   const [editing, setEditing] = useState(false)
   // Drafts are keyed by clinician and held as strings so a half-typed value and a
   // deliberately cleared field both survive until commit.
@@ -328,6 +329,29 @@ export default function PractitionerStatsPage() {
   // The calculator emits an empty remainder as 9999-12-31 when a month ends on
   // Week 4's Sunday — don't offer a tab for a range that does not exist.
   const selectableWeeks = (report?.weeks ?? []).filter((w) => w.dateFrom !== '9999-12-31')
+
+  const runSync = async () => {
+    setSyncing(true)
+    try {
+      const r = await practitionerStatsApi.sync(year, month)
+      await load()
+      const bits = [`${r.appointments} appointments · ${r.rowsWritten} rows`]
+      // A practitioner whose Nookal record could not be matched contributes
+      // nothing, and silence about that would read as a genuine zero.
+      if (r.mapping.unresolved.length) {
+        bits.push(`unmatched: ${r.mapping.unresolved.map((u) => u.fullName || u.userId).join(', ')}`)
+      }
+      if (r.unmappedProviderIds.length) {
+        bits.push(`${r.unmappedProviderIds.length} Nookal provider(s) skipped — no PhysioWard account`)
+      }
+      toast.success(`Synced ${MONTHS[month - 1]} ${year} — ${bits.join(' · ')}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Sync failed'
+      toast.error(`${msg} — nothing was changed`)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   /** Seed drafts from what is already stored, so editing starts from the truth. */
   const beginEdit = () => {
@@ -473,13 +497,27 @@ export default function PractitionerStatsPage() {
             </div>
           )}
 
+          <button
+            onClick={runSync}
+            disabled={syncing || editing}
+            title="Pull this month's appointments from Nookal and fill Total Appts, NC and cancellations for every practitioner. Occupancy is not touched — Nookal has no working-hours figure."
+            style={{
+              marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
+              border: 'none', background: syncing ? '#9ca3af' : TEAL, color: '#fff',
+              fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
+              cursor: syncing || editing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {syncing ? 'Syncing Nookal…' : 'Sync Nookal'}
+          </button>
+
           {week && (
             editing ? (
               <button
                 onClick={finishEdit}
                 disabled={saving}
                 style={{
-                  marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
+                  padding: '7px 15px', borderRadius: 7,
                   border: 'none', background: TEAL, color: '#fff',
                   fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
                   cursor: saving ? 'wait' : 'pointer',
@@ -490,9 +528,9 @@ export default function PractitionerStatsPage() {
             ) : (
               <button
                 onClick={beginEdit}
-                title="Enter the three figures Nookal will not give us: Total Appts, Occupancy and NC"
+                title="Type in Occupancy by hand — Nookal exposes no working-hours figure. Total Appts and NC come from Sync."
                 style={{
-                  marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
+                  padding: '7px 15px', borderRadius: 7,
                   border: `1px solid ${TEAL}`, background: '#f0faf7', color: TEAL,
                   fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
                   cursor: 'pointer',

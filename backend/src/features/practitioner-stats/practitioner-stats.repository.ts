@@ -90,6 +90,10 @@ export interface WeekInputRow {
   total_appts:   number | null;
   occupancy_pct: number | null;
   new_cases:     number | null;
+  /** Nookal 'Cancelled' appointments — see migration 026 for why it is a count. */
+  cancelled_count: number | null;
+  /** Null = never synced from Nookal (hand-entered only). */
+  synced_at:     string | null;
 }
 
 export interface UpsertWeekInput {
@@ -251,8 +255,11 @@ export const practitionerStatsRepository = {
       total_appts:   number | null;
       occupancy_pct: string | null;   // NUMERIC comes back as text
       new_cases:     number | null;
+      cancelled_count: number | null;
+      synced_at:     Date | null;
     }>(
-      `SELECT clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases
+      `SELECT clinician_id, year, month, week_num, total_appts, occupancy_pct,
+              new_cases, cancelled_count, synced_at
          FROM practitioner_week_inputs
         WHERE year = $1 AND month = $2`,
       [year, month]
@@ -265,6 +272,8 @@ export const practitionerStatsRepository = {
       total_appts:   r.total_appts === null ? null : Number(r.total_appts),
       occupancy_pct: r.occupancy_pct === null ? null : Number(r.occupancy_pct),
       new_cases:     r.new_cases === null ? null : Number(r.new_cases),
+      cancelled_count: r.cancelled_count === null ? null : Number(r.cancelled_count),
+      synced_at:     r.synced_at ? r.synced_at.toISOString() : null,
     }));
   },
 

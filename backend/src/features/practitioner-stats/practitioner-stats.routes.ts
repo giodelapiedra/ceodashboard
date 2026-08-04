@@ -3,6 +3,7 @@ import { authMiddleware, AuthRequest } from '../../middleware/auth.middleware';
 import { requireRole } from '../../middleware/role.middleware';
 import { practitionerStatsService } from './practitioner-stats.service';
 import { practitionerStatsRepository } from './practitioner-stats.repository';
+import { syncMonth } from './practitioner-stats.nookal';
 import {
   practitionerStatsQuerySchema,
   upsertWeekInputSchema,
@@ -44,6 +45,28 @@ router.put('/week-input', async (req: AuthRequest, res: Response, next: NextFunc
 
     await practitionerStatsRepository.upsertWeekInput({ ...body, entered_by: enteredBy });
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+/**
+ * POST /api/practitioner-stats/sync?year=2026&month=7
+ *
+ * Pulls one month of Nookal appointments and fills Total Appts, NC and the
+ * cancelled count for every mapped practitioner-week. Occupancy is left alone —
+ * Nookal exposes no working-hours figure, so a hand-entered value must survive.
+ *
+ * Returns the mapping outcome as well, because a practitioner whose Nookal
+ * provider record could not be matched contributes nothing and that has to be
+ * visible rather than read as a genuine zero.
+ */
+router.post('/sync', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { year, month } = practitionerStatsQuerySchema.parse(req.query);
+    const actingUserId = req.scope?.userId;
+    if (!actingUserId) return res.status(401).json({ message: 'Not authenticated' });
+
+    const result = await syncMonth(year, month, actingUserId);
+    res.json(result);
   } catch (err) { next(err); }
 });
 

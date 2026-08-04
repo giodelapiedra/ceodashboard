@@ -12,6 +12,21 @@ export interface Metric {
   note?: string;
 }
 
+export interface SyncResult {
+  year:         number;
+  month:        number;
+  weeksSynced:  number;
+  appointments: number;
+  rowsWritten:  number;
+  mapping: {
+    mapped:     { userId: string; fullName: string; staffID: number; nookalName: string; how: string }[];
+    unresolved: { userId: string; fullName: string }[];
+    orphanProviders: { staffID: number; fullName: string | null }[];
+  };
+  /** Providers in the feed with no mapped user — their appointments were skipped. */
+  unmappedProviderIds: number[];
+}
+
 /** One practitioner-week of hand-read Nookal figures. */
 export interface WeekInputPayload {
   clinician_id:  string;
@@ -89,5 +104,17 @@ export const practitionerStatsApi = {
    */
   async saveWeekInput(payload: WeekInputPayload): Promise<void> {
     await api.put('/api/practitioner-stats/week-input', payload);
+  },
+
+  /**
+   * Pull a month of Nookal appointments and fill Total Appts, NC and the
+   * cancelled count for every mapped practitioner. Occupancy is untouched —
+   * Nookal has no working-hours figure, so a hand-entered value survives.
+   */
+  async sync(year: number, month: number): Promise<SyncResult> {
+    const { data } = await api.post<SyncResult>('/api/practitioner-stats/sync', null, {
+      params: { year, month },
+    });
+    return data;
   },
 };

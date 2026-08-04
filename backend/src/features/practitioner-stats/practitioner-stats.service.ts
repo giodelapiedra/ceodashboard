@@ -122,7 +122,7 @@ const OCCUPANCY_IMPOSSIBLE =
  *  is settled. See the comment at the cancellationPct assignment for the
  *  reconciliation evidence. */
 const CANCELLATION_UNRECONCILED =
-  'UNVERIFIED — cancellation events ÷ Total Appts. Does not reconcile with the spreadsheet (Isabella, June 2026 W1: sheet 12%, this method 30-46% depending on date bucketing). SOP step 39 excludes churns but its own examples include them. Do not act on this figure until the count is agreed.';
+  'PARTLY VERIFIED — Nookal cancelled appointments ÷ Total Appts. Matches the spreadsheet exactly for some practitioners (Angus, July 2026 W1: 3/40 = 7.50%) but runs high for others, because Nookal\'s Cancelled status includes appointments that were rescheduled while the spreadsheet excludes them. Treat as an upper bound until the rescheduled exclusion is added.';
 
 /** Higher is better, with an explicit target band. */
 function zoneHigher(value: number, thriving: number, refining: number): Zone {
@@ -195,6 +195,9 @@ interface Counters {
   apptsSum: number; apptsN: number;
   ncSum:    number; ncN:    number;
   occSum:   number; occN:   number;
+  /** Nookal 'Cancelled' appointments — the Cancellation % numerator. Distinct
+   *  from `cancellations`, which counts hand-logged dropout entries. */
+  nookalCancelled: number; nookalCancelledN: number;
   /** Any contributing occupancy over 100%, so the Team row can flag it too. */
   occImpossible: boolean;
 }
@@ -204,6 +207,7 @@ const emptyCounters = (): Counters => ({
   tpYes: 0, tpNo: 0, prepayOffered: 0, prepayAccepted: 0,
   cancellations: 0, churns: 0,
   apptsSum: 0, apptsN: 0, ncSum: 0, ncN: 0, occSum: 0, occN: 0,
+  nookalCancelled: 0, nookalCancelledN: 0,
   occImpossible: false,
 });
 
@@ -230,6 +234,10 @@ function addWeekInput(c: Counters, r: WeekInputRow): void {
     c.occSum += r.occupancy_pct;
     c.occN   += 1;
     if (r.occupancy_pct > 100) c.occImpossible = true;
+  }
+  if (r.cancelled_count !== null) {
+    c.nookalCancelled  += r.cancelled_count;
+    c.nookalCancelledN += 1;
   }
 }
 
@@ -316,9 +324,9 @@ function toStats(
     // appointment "is both a cancellation and a churn statistic". Until Sam
     // settles that, the value is shown bare with the discrepancy attached rather
     // than dressed in a green or red zone it has not earned.
-    cancellationPct: c.apptsSum > 0
+    cancellationPct: (c.nookalCancelledN > 0 && c.apptsSum > 0)
       ? {
-          value: round2((c.cancellations / c.apptsSum) * 100),
+          value: round2((c.nookalCancelled / c.apptsSum) * 100),
           zone:  null,
           note:  CANCELLATION_UNRECONCILED,
         }
