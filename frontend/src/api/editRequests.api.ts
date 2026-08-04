@@ -1,6 +1,6 @@
 import api from './client'
 
-export type EditEntityType = 'case_acceptance' | 'dropout'
+export type EditEntityType = 'case_acceptance' | 'dropout' | 'ad_lead'
 export type EditRequestStatus = 'pending' | 'approved' | 'rejected'
 
 export interface EditRequestDTO {

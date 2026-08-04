@@ -7,6 +7,7 @@ import {
   createAdSpendSchema,
   updateAdSpendSchema,
   listAdSpendQuerySchema,
+  leadsRoiQuerySchema,
 } from './ad-spend.validators';
 
 const router = Router();
@@ -61,6 +62,17 @@ router.get('/summary', async (req: AuthRequest, res: Response, next: NextFunctio
     const filters = listAdSpendQuerySchema.parse(req.query);
     const summary = await adSpendService.summary(req.scope!, filters);
     res.json(summary);
+  } catch (err) { next(err); }
+});
+
+// GET /api/ad-spend/leads-roi — all-time "Paid (Nookal) vs spend" per platform
+// group (Google vs Meta), sourced from the synced ad-lead totals. ADMIN only:
+// lead revenue is not the ADSPEND encoder's concern.
+// Must come before /:id so Express doesn't swallow "leads-roi" as an id.
+router.get('/leads-roi', requireRole('ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { date_from, date_to } = leadsRoiQuerySchema.parse(req.query);
+    res.json(await adSpendService.leadsRoi(date_from, date_to));
   } catch (err) { next(err); }
 });
 

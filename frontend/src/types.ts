@@ -68,7 +68,7 @@ export interface DashboardData {
 export type Role = 'ADMIN' | 'CLINICIAN' | 'FRONT_DESK' | 'FRONT_DESK_GLOBAL' | 'ADSPEND';
 
 export const ROLE_LABEL: Record<Role, string> = {
-  ADMIN:             'Admin',
+  ADMIN:             'Super Admin',
   CLINICIAN:         'Clinician',
   FRONT_DESK:        'Front Desk',
   FRONT_DESK_GLOBAL: 'Front Desk (All Clinics)',
@@ -110,18 +110,15 @@ export type DropoutStatus = typeof DROPOUT_STATUSES[number];
 
 // Fixed list of front-of-staff names (NOT user accounts). Source: live sheet.
 export const FRONT_STAFF_NAMES = [
-  'Tanya',
+  'Ann Maree',
   'Bella',
-  'Sandra',
-  'AM',
-  'Jenny',
-  'Teresa',
-  'Ben',
-  'Other - Physio',
-  'Carolyn',
-  'Vanessa',
+  'Brooke',
   'Holly',
+  'Jenny',
+  'Tanya',
   'Tilly',
+  'Vanessa',
+  'Other - Physio',
 ] as const;
 export type FrontStaffName = typeof FRONT_STAFF_NAMES[number];
 
@@ -182,6 +179,65 @@ export interface AdSpendDTO {
   notes:           string | null;
   created_at:      string;
   updated_at:      string;
+}
+
+// ── Meta/Google ADS Leads ──────────────────────────────────────
+// Mirror of backend/src/shared/roles.ts. EXACT copy of the sheet's "Platform
+// Source" dropdown (same options + order) so the form is gayang-gaya.
+export const AD_LEAD_PLATFORMS = [
+  'Facebook Lead Form Ads',
+  'FB Athlete Landing Page Ad',
+  'Google Ads',
+  'FB Paid Ad Quiz',
+  "FB Over 40's Landing Page Ad",
+] as const;
+export type AdLeadPlatform = typeof AD_LEAD_PLATFORMS[number];
+
+// EXACT copy of the sheet's "Bella Called?" / "Bella SMS?" dropdown options.
+export const BELLA_CONTACT_OPTIONS = [
+  'Y',
+  'N',
+  'already booked in',
+  'booked in during call',
+  'Double called and left message',
+  'Triple called within 24 hours',
+  'Not interested',
+] as const;
+export type BellaContactOption = typeof BELLA_CONTACT_OPTIONS[number];
+
+// Front-desk accounts allowed into the Meta/Google Leads (ad-leads) section.
+// Only these logins see/encode leads; every other front-desk account has no
+// access. Mirrored in backend/src/shared/roles.ts (source of truth for the
+// server-side gate). ADMIN keeps its own read-only admin view separately.
+export const AD_LEADS_ENCODER_EMAILS: readonly string[] = [
+  'bella@physioward.com.au',
+];
+
+/** True if this login is one of the allow-listed ad-leads encoders. */
+export function isAdLeadsEncoder(email: string | null | undefined): boolean {
+  return !!email && AD_LEADS_ENCODER_EMAILS.includes(email.toLowerCase());
+}
+
+export interface AdLeadDTO {
+  id:              string;
+  clinic_id:       ClinicId;
+  entered_by:      string;
+  entered_by_name: string | null;
+  patient_name:    string;
+  platform:        string;
+  campaign_name:   string | null;
+  date_added:      string;          // YYYY-MM-DD
+  booked:          boolean;
+  bella_called:    string | null;
+  bella_sms:       string | null;
+  bella_remarks:   string | null;
+  created_at:      string;
+  updated_at:      string;
+  // Persisted Nookal account totals (written by the Sync Paid button).
+  nookal_status:     'matched' | 'multiple' | 'not_found' | 'error' | null;
+  nookal_candidates: { clientID: number; fullName: string; invoiceCount: number; invoiced: number; paid: number }[] | null;
+  nookal_paid:       number | null;
+  nookal_synced_at:  string | null;
 }
 
 // ── Case Recommendation & Acceptance ───────────────────────────

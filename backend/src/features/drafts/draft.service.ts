@@ -45,11 +45,17 @@ export const draftService = {
     if (existing.owner_id !== scope.userId) {
       throw Errors.forbidden('You can only edit your own drafts');
     }
-    return draftRepository.update(id, {
-      clinic_id:    normClinic(patch.clinic_id),
-      patient_name: normPatient(patch.patient_name),
+    // PATCH semantics: fields the client did not send keep their stored value.
+    // (Previously an omitted clinic_id/patient_name was silently nulled out.)
+    const updated = await draftRepository.update(id, {
+      clinic_id:    patch.clinic_id    === undefined ? existing.clinic_id    : normClinic(patch.clinic_id),
+      patient_name: patch.patient_name === undefined ? existing.patient_name : normPatient(patch.patient_name),
       form_data:    patch.form_data,
     });
+    // Deleted between the ownership check and the UPDATE (e.g. submitted from
+    // another tab) — surface as 404, not a crash.
+    if (!updated) throw Errors.notFound(`Draft ${id} not found`);
+    return updated;
   },
 
   async delete(scope: RequestScope, id: string): Promise<void> {

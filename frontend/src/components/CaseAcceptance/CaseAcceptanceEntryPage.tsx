@@ -4,6 +4,7 @@ import {
   CreateCaseAcceptancePayload, UpdateCaseAcceptancePayload,
   CaseAcceptanceSummary,
 } from '../../api/caseAcceptance.api'
+import { DuplicateReport, OnDuplicate, duplicateReportFromError } from '../../api/duplicates'
 import { draftsApi, DraftDTO } from '../../api/drafts.api'
 import { deleteRequestsApi } from '../../api/deleteRequests.api'
 import { editRequestsApi } from '../../api/editRequests.api'
@@ -20,7 +21,9 @@ import { useDraftResumeStore } from '../../store/draftResume.store'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import { promptDialog } from '../../store/prompt.store'
+import { duplicateDialog, DuplicateField } from '../../store/duplicate.store'
 import AppShell from '../shared/AppShell'
+import PatientNameInput from '../shared/PatientNameInput'
 import Pagination from '../shared/Pagination'
 import DraftsPanel from '../shared/DraftsPanel'
 import DraftBlockerModal from '../shared/DraftBlockerModal'
@@ -71,6 +74,82 @@ function boolToTri(b: boolean | null | undefined): Tri {
   return ''
 }
 
+/** Placeholder for blank values in the duplicate diff table. */
+const DASH = '—'
+const ynText = (b: boolean | null): string => (b === null ? DASH : b ? 'Yes' : 'No')
+
+/**
+ * The values that will actually be stored. The natural-key fields (patient,
+ * date, clinician, clinic) are identical by definition when we hit a duplicate,
+ * so they live in the dialog subtitle — only what can differ gets a diff row.
+ */
+interface CaseAcceptanceValues {
+  front_staff_name:        string | null
+  treatment_plan_provided: boolean | null
+  case_recommendations:    number
+  appointments_booked:     number
+  prepay_offered:          boolean | null
+  prepay_accepted:         boolean | null
+  transition_notes:        string | null
+  notes:                   string | null
+}
+
+function caseAcceptanceDiffFields(
+  existing: CaseAcceptanceDTO,
+  incoming: CaseAcceptanceValues
+): DuplicateField[] {
+  return [
+    {
+      label:    'TP provided',
+      existing: ynText(existing.treatment_plan_provided),
+      incoming: ynText(incoming.treatment_plan_provided),
+    },
+    {
+      label:    'Recommendations',
+      existing: String(existing.case_recommendations),
+      incoming: String(incoming.case_recommendations),
+    },
+    {
+      label:    'Booked',
+      existing: String(existing.appointments_booked),
+      incoming: String(incoming.appointments_booked),
+    },
+    { label: 'Prepay offered',  existing: ynText(existing.prepay_offered),  incoming: ynText(incoming.prepay_offered) },
+    { label: 'Prepay accepted', existing: ynText(existing.prepay_accepted), incoming: ynText(incoming.prepay_accepted) },
+    {
+      label:    'Front staff',
+      existing: existing.front_staff_name || DASH,
+      incoming: incoming.front_staff_name || DASH,
+    },
+    { label: 'TP notes', existing: existing.transition_notes || DASH, incoming: incoming.transition_notes || DASH },
+    { label: 'Notes',    existing: existing.notes            || DASH, incoming: incoming.notes            || DASH },
+  ]
+}
+
+/** Only the fields that actually changed — an edit request should ask the
+ *  admin to approve the difference, not re-state the whole row. */
+function caseAcceptancePatchFrom(
+  existing: CaseAcceptanceDTO,
+  incoming: CaseAcceptanceValues
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+  if ((incoming.front_staff_name || null) !== (existing.front_staff_name || null))
+    patch.front_staff_name = incoming.front_staff_name || null
+  if (incoming.treatment_plan_provided !== existing.treatment_plan_provided)
+    patch.treatment_plan_provided = incoming.treatment_plan_provided
+  if (incoming.case_recommendations !== existing.case_recommendations)
+    patch.case_recommendations = incoming.case_recommendations
+  if (incoming.appointments_booked !== existing.appointments_booked)
+    patch.appointments_booked = incoming.appointments_booked
+  if (incoming.prepay_offered  !== existing.prepay_offered)  patch.prepay_offered  = incoming.prepay_offered
+  if (incoming.prepay_accepted !== existing.prepay_accepted) patch.prepay_accepted = incoming.prepay_accepted
+  if ((incoming.transition_notes || null) !== (existing.transition_notes || null))
+    patch.transition_notes = incoming.transition_notes || null
+  if ((incoming.notes || null) !== (existing.notes || null))
+    patch.notes = incoming.notes || null
+  return patch
+}
+
 interface FormState {
   date_logged:              string
   clinic_id:                ClinicId | ''
@@ -86,11 +165,18 @@ interface FormState {
   notes:                    string
 }
 
+// Clinician dropdowns show first name only (e.g. "Emma Sloot" → "Emma").
+// The stored user record is never changed — this is display-only.
+function clinicianFirstName(c: User): string {
+  return c.full_name?.trim().split(/\s+/)[0] || c.email
+}
+
 function emptyForm(currentUser: User): FormState {
-  // CLINICIAN + FRONT_DESK_GLOBAL pick clinic per entry (clinicians rotate
-  // between sites); FRONT_DESK is pinned to scope by the server.
+  // CLINICIAN + FRONT_DESK_GLOBAL + ADMIN pick clinic per entry (clinicians
+  // rotate between sites and the super admin has no pinned clinic);
+  // FRONT_DESK is pinned to scope by the server.
   const picksClinic =
-    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN'
+    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN' || currentUser.role === 'ADMIN'
   return {
     date_logged:             todayISO(),
     clinic_id:               picksClinic
@@ -155,9 +241,11 @@ export default function CaseAcceptanceEntryPage() {
   const [form, setForm] = useState<FormState>(emptyForm(user))
   const [saving, setSaving] = useState(false)
 
-  // Saved drafts (this user's own, server-side so they survive logout). ADMIN
-  // can't create entries, so drafts don't apply to them.
+  // Saved drafts (this user's own, server-side so they survive logout).
   const isAdmin = user.role === 'ADMIN'
+  // Clinicians AND admins get the Encode / Entries tab split; front-desk roles
+  // keep the stacked (form + list) layout.
+  const useTabs = isClinician || isAdmin || isReceptionist
   const [activeTab, setActiveTab] = useState<'encode' | 'entries'>('encode')
   const [drafts, setDrafts] = useState<DraftDTO<FormState>[]>([])
   // The draft currently loaded into the form (null = composing a fresh entry).
@@ -166,10 +254,9 @@ export default function CaseAcceptanceEntryPage() {
   const [showDraftBlocker, setShowDraftBlocker] = useState(false)
 
   const reloadDrafts = useCallback(async () => {
-    if (isAdmin) return
     try { setDrafts(await draftsApi.list<FormState>('case_acceptance')) }
     catch { /* drafts are a convenience — never block the page on them */ }
-  }, [isAdmin])
+  }, [])
   useEffect(() => { reloadDrafts() }, [reloadDrafts])
 
   // Entry ids this user already has a pending delete request for — swaps the
@@ -286,7 +373,7 @@ export default function CaseAcceptanceEntryPage() {
     editingRowRef.current = row
     setEditingId(row.id)
     setDraftId(null)  // editing a real entry is unrelated to drafts
-    if (isClinician) setActiveTab('encode')
+    if (useTabs) setActiveTab('encode')
     setForm({
       date_logged:             row.date_logged,
       clinic_id:               row.clinic_id,
@@ -312,7 +399,7 @@ export default function CaseAcceptanceEntryPage() {
     setEditingId(null)
     setDraftId(null)
     setForm(emptyForm(user))
-    if (isClinician) setActiveTab('entries')
+    if (useTabs) setActiveTab('entries')
   }
 
   // Save the current form as a draft (create the first time, overwrite after).
@@ -351,7 +438,7 @@ export default function CaseAcceptanceEntryPage() {
     setEditingId(null)
     setForm({ ...emptyForm(user), ...d.form_data })
     setDraftId(d.id)
-    if (isClinician) setActiveTab('encode')
+    if (useTabs) setActiveTab('encode')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -377,6 +464,77 @@ export default function CaseAcceptanceEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending])
 
+  /**
+   * Show the duplicate dialog for an exact match and turn the answer into the
+   * next action:
+   *   'allow'     → POST it as a genuinely separate entry
+   *   'overwrite' → POST with on_duplicate=overwrite (ADMIN only here)
+   *   'handled'   → an edit request was filed instead; nothing left to do
+   *   null        → user backed out, save nothing
+   *
+   * Unlike dropouts, non-admins can never write over an existing case entry —
+   * every non-admin edit already goes through admin approval, and the
+   * duplicate guard must not become a way around that.
+   */
+  const resolveDuplicate = async (
+    report:   DuplicateReport<CaseAcceptanceDTO>,
+    incoming: CaseAcceptanceValues
+  ): Promise<'allow' | 'overwrite' | 'handled' | null> => {
+    const existing = report.exact!
+    const owner    = existing.entered_by_name || 'another user'
+
+    const choice = await duplicateDialog.ask({
+      title:    'This case entry is already logged',
+      subtitle: [
+        existing.patient_name,
+        existing.date_logged,
+        CLINIC_LABEL[existing.clinic_id as ClinicId] ?? existing.clinic_id,
+        existing.clinician_name,
+      ].filter(Boolean).join('  ·  '),
+      existingMeta:  `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
+      fields:        caseAcceptanceDiffFields(existing, incoming),
+      primaryLabel:  report.can_overwrite ? 'Overwrite existing entry' : 'Send update for approval',
+      primaryNote:   report.can_overwrite
+        ? 'Overwriting replaces the saved values. The old ones stay in the audit log.'
+        : 'Changing a saved case entry always needs admin approval.',
+      separateLabel: 'Not a duplicate — save separately',
+    })
+
+    if (choice === 'cancel')   return null
+    if (choice === 'separate') return 'allow'
+    if (report.can_overwrite)  return 'overwrite'
+
+    // No direct write → file an edit request against the row that exists,
+    // rather than adding a second one.
+    const patch = caseAcceptancePatchFrom(existing, incoming)
+    if (Object.keys(patch).length === 0) {
+      toast.error('Nothing to change — your entry matches the saved one exactly')
+      return null
+    }
+
+    const reason = await promptDialog.ask({
+      title:        'Why should this entry be changed?',
+      message:      `Patient: ${existing.patient_name}\n\nThe admin reviews this together with your changes.`,
+      placeholder:  'e.g. Booked count was wrong — patient took 4 appointments',
+      confirmLabel: 'Submit for approval',
+    })
+    if (reason === null) return null
+
+    try {
+      await editRequestsApi.create({
+        entity_type: 'case_acceptance',
+        entity_id:   existing.id,
+        reason:      reason.trim() || 'Duplicate entry — corrected values',
+        patch,
+      })
+      toast.success('Edit request submitted — waiting for admin approval')
+      return 'handled'
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || 'Failed to submit edit request')
+      return null
+    }
+  }
+
   const onSubmit = async () => {
     setError('')
 
@@ -392,7 +550,7 @@ export default function CaseAcceptanceEntryPage() {
     if (!form.clinician_id)                    return setError('Clinician is required')
     if (!isReceptionist && !form.front_staff_name)
                                                return setError('Front of staff name is required')
-    if (!form.transition_notes.trim())         return setError('Transition notes are required — explain what was discussed and any objections')
+    if (!form.transition_notes.trim())         return setError('Treatment Plan notes are required — explain what was discussed and any objections')
 
     // Whole numbers only — parseInt would silently truncate "3.7" to 3.
     if (!/^\d+$/.test(form.case_recommendations.trim())) return setError('Case recommendations must be a whole number')
@@ -403,22 +561,58 @@ export default function CaseAcceptanceEntryPage() {
     if (!Number.isFinite(booked) || booked < 0) return setError('Appointments booked must be a non-negative integer')
     if (booked > recs)                          return setError('Booked cannot exceed case recommendations')
 
-    // New entry with a patient name that already exists → warn, don't block.
-    // It can legitimately be the same client with a new case.
+    // The values that will actually be stored — the duplicate diff and any
+    // edit-request patch are both computed from these.
+    const incoming: CaseAcceptanceValues = {
+      // Receptionists get front_staff_name stamped server-side from their
+      // login; show what will really be saved, not the (ignored) form value.
+      front_staff_name:        isReceptionist ? (user.full_name || null) : (form.front_staff_name || null),
+      treatment_plan_provided: triToBool(form.treatment_plan_provided),
+      case_recommendations:    recs,
+      appointments_booked:     booked,
+      prepay_offered:          triToBool(form.prepay_offered),
+      prepay_accepted:         triToBool(form.prepay_accepted),
+      transition_notes:        form.transition_notes.trim() || null,
+      notes:                   form.notes.trim() || null,
+    }
+
+    // New entry → look for an existing one with the same natural key. This is
+    // only a pre-flight for the UI: the POST re-checks under a lock, so a
+    // failed check here must never block the save.
+    let onDuplicate: OnDuplicate | undefined
     if (!editingId) {
-      const name = form.patient_name.trim()
-      let dupes: CaseAcceptanceDTO[] = []
+      let report: DuplicateReport<CaseAcceptanceDTO> | null = null
       try {
-        const res = await caseAcceptanceApi.list({ search: name, limit: 50 })
-        dupes = res.data.filter(d => d.patient_name.trim().toLowerCase() === name.toLowerCase())
-      } catch { /* best-effort — never block saving because the check failed */ }
-      if (dupes.length > 0) {
-        const latest = dupes.map(d => d.date_logged).sort().slice(-1)[0]
+        report = await caseAcceptanceApi.checkDuplicate({
+          ...(picksClinic ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          clinician_id: form.clinician_id,
+          patient_name: form.patient_name.trim(),
+          date_logged:  form.date_logged,
+        })
+      } catch { /* best-effort — the POST re-checks under a lock */ }
+
+      if (report?.exact) {
+        const decision = await resolveDuplicate(report, incoming)
+        if (decision === null) return
+        if (decision === 'handled') {
+          cancelEdit(); await load(); await reloadPendingEdits(); return
+        }
+        onDuplicate = decision
+      } else if (report && report.similar.length > 0) {
+        // Tier 2: same patient at this clinic within two weeks, but a
+        // different clinician or date. Legitimate often enough that it only
+        // warrants a heads-up — the usual cause is a mistyped date.
+        const near  = report.similar[0]
+        const extra = report.similar.length - 1
         const ok = await confirmDialog.ask({
-          title:        'Same patient name already logged',
-          message:      `"${name}" already has ${dupes.length === 1 ? 'a case entry' : `${dupes.length} case entries`} (latest: ${latest}).\n\nIf this is the same client with a new case, adding another entry is fine. Add this entry?`,
+          title:   'Same patient logged nearby',
+          message:
+            `"${near.patient_name}" already has a case entry on ${near.date_logged}` +
+            `${near.clinician_name ? ` under ${near.clinician_name}` : ''}` +
+            `${extra > 0 ? ` (and ${extra} more within two weeks)` : ''}.` +
+            `\n\nDouble-check the date and clinician. Add this entry?`,
           confirmLabel: 'Yes, add entry',
-          cancelLabel:  'Cancel',
+          cancelLabel:  'Let me check',
         })
         if (!ok) return
       }
@@ -523,10 +717,35 @@ export default function CaseAcceptanceEntryPage() {
       } else {
         const payload: CreateCaseAcceptancePayload = {
           ...shared,
-          ...((isClinician || isFrontDeskGlobal) ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          // CLINICIAN + FRONT_DESK_GLOBAL + ADMIN pick clinic per entry;
+          // FRONT_DESK is pinned server-side from scope.
+          ...(picksClinic ? { clinic_id: form.clinic_id as ClinicId } : {}),
         }
-        await caseAcceptanceApi.create(payload)
-        toast.success(`Added case entry for ${patientName}`)
+
+        let overwrote = onDuplicate === 'overwrite'
+        try {
+          await caseAcceptanceApi.create({
+            ...payload,
+            ...(onDuplicate ? { on_duplicate: onDuplicate } : {}),
+          })
+        } catch (e: any) {
+          // Someone keyed the same entry between the pre-flight check and this
+          // POST — the server won that race. Show the same dialog and retry.
+          const raced = duplicateReportFromError<CaseAcceptanceDTO>(e)
+          if (!raced) throw e
+
+          const decision = await resolveDuplicate(raced, incoming)
+          if (decision === null) return
+          if (decision === 'handled') {
+            cancelEdit(); await load(); await reloadPendingEdits(); return
+          }
+          overwrote = decision === 'overwrite'
+          await caseAcceptanceApi.create({ ...payload, on_duplicate: decision })
+        }
+
+        toast.success(overwrote
+          ? `Overwrote the existing case entry for ${patientName}`
+          : `Added case entry for ${patientName}`)
       }
       if (!editingId && draftId) {
         try { await draftsApi.remove(draftId) } catch { /* best-effort cleanup */ }
@@ -588,18 +807,18 @@ export default function CaseAcceptanceEntryPage() {
     return row.entered_by === user.id
   }
 
-  // ADMINs are blocked from creating entries (backend enforces). Show the
-  // form only when editing an existing row — never for fresh creation.
-  const showCreateForm = user.role !== 'ADMIN' || editingId !== null
+  // Every entry role (including ADMIN) can create; the form doubles as the
+  // editor when a row is loaded, so it's always shown.
+  const showCreateForm = true
 
   return (
-    <AppShell title="Daily Case Recommendation & Acceptance Tracker">
+    <AppShell title="Daily Case Recommendation & Acceptance Tracker" hideNav>
       <div className="pw-page" style={{ padding: '20px 28px' }}>
-        {isClinician && (
-          <SubTabs active={activeTab} total={total} onChange={setActiveTab} />
+        {useTabs && (
+          <SubTabs active={activeTab} total={total} entriesLabel={isAdmin ? 'All Entries' : 'My Entries'} onChange={setActiveTab} />
         )}
-        {/* Form card — hidden for ADMINs unless they're editing an existing row */}
-        {(!isClinician || activeTab === 'encode') && showCreateForm && (
+        {/* Form card — create a new entry, or edit the row currently loaded */}
+        {(!useTabs || activeTab === 'encode') && showCreateForm && (
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           padding: 18, marginBottom: 20,
@@ -666,7 +885,7 @@ export default function CaseAcceptanceEntryPage() {
                     style={inputStyle}>
                     <option value="">— Select clinician —</option>
                     {clinicians.map(c => (
-                      <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
+                      <option key={c.id} value={c.id}>{clinicianFirstName(c)}</option>
                     ))}
                   </select>
                 </Field>
@@ -702,8 +921,9 @@ export default function CaseAcceptanceEntryPage() {
               )}
 
               <Field label="Patient name">
-                <input value={form.patient_name}
-                  onChange={e => setForm({ ...form, patient_name: e.target.value })}
+                <PatientNameInput
+                  value={form.patient_name}
+                  onChange={v => setForm({ ...form, patient_name: v })}
                   placeholder="e.g. Andrew Hicks"
                   style={inputStyle} />
               </Field>
@@ -748,7 +968,7 @@ export default function CaseAcceptanceEntryPage() {
 
             {/* ── Row 5: Transition notes / Notes ── */}
             <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
-              <Field label="Transition (TP explained / objections) *">
+              <Field label="Treatment plan *">
                 <textarea value={form.transition_notes}
                   onChange={e => setForm({ ...form, transition_notes: e.target.value })}
                   rows={3}
@@ -796,7 +1016,7 @@ export default function CaseAcceptanceEntryPage() {
         )}
 
         {/* Saved drafts — this user's own, resume anytime (even after re-login) */}
-        {(!isClinician || activeTab === 'encode') && !isAdmin && (
+        {(!useTabs || activeTab === 'encode') && (
           <DraftsPanel
             drafts={drafts}
             onResume={resumeDraft}
@@ -806,7 +1026,7 @@ export default function CaseAcceptanceEntryPage() {
         )}
 
         {/* Rejected edit notifications */}
-        {(!isClinician || activeTab === 'entries') && visibleRejections.map(r => (
+        {(!useTabs || activeTab === 'entries') &&visibleRejections.map(r => (
           <div key={r.id} style={{
             background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 10,
             padding: '12px 16px', marginBottom: 12,
@@ -837,10 +1057,10 @@ export default function CaseAcceptanceEntryPage() {
         ))}
 
         {/* Summary cards — always visible, scoped to the active filter */}
-        {(!isClinician || activeTab === 'entries') && <SummaryCards summary={summary} />}
+        {(!useTabs || activeTab === 'entries') &&<SummaryCards summary={summary} />}
 
         {/* Table */}
-        {(!isClinician || activeTab === 'entries') && (
+        {(!useTabs || activeTab === 'entries') &&(
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           overflow: 'hidden',
@@ -869,7 +1089,7 @@ export default function CaseAcceptanceEntryPage() {
               >
                 <option value="">All Clinicians</option>
                 {clinicians.map(c => (
-                  <option key={c.id} value={c.id}>{c.full_name}</option>
+                  <option key={c.id} value={c.id}>{clinicianFirstName(c)}</option>
                 ))}
               </select>
               <div style={{ position: 'relative' }}>
@@ -933,7 +1153,7 @@ export default function CaseAcceptanceEntryPage() {
                     <Th align="right">Acceptance</Th>
                     <Th align="center">Prepay offered</Th>
                     <Th align="center">Prepay accepted</Th>
-                    <Th>Transition notes</Th>
+                    <Th>Treatment Plan notes</Th>
                     <Th>Notes</Th>
                     <Th align="right">Actions</Th>
                   </tr>
@@ -1053,15 +1273,15 @@ function StatusChip({ label, color, title }: { label: string; color: 'blue' | 'a
 }
 
 function SubTabs({
-  active, total, onChange,
-}: { active: 'encode' | 'entries'; total: number; onChange: (t: 'encode' | 'entries') => void }) {
+  active, total, onChange, entriesLabel = 'My Entries',
+}: { active: 'encode' | 'entries'; total: number; onChange: (t: 'encode' | 'entries') => void; entriesLabel?: string }) {
   return (
     <div style={{
       display: 'flex', gap: 0, marginBottom: 16,
       borderBottom: '2px solid #e5e7eb',
     }}>
       {(['encode', 'entries'] as const).map(t => {
-        const label = t === 'encode' ? 'Encode' : `My Entries (${total.toLocaleString()})`
+        const label = t === 'encode' ? 'Encode' : `${entriesLabel} (${total.toLocaleString()})`
         const isActive = active === t
         return (
           <button

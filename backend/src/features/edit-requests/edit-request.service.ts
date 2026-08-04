@@ -3,10 +3,13 @@ import {
 } from './edit-request.repository';
 import { caseAcceptanceRepository, UpdateInput } from '../case-acceptance/case-acceptance.repository';
 import { dropoutRepository, UpdateDropoutInput } from '../dropouts/dropout.repository';
-import { userRepository } from '../../repositories/user.repository';
+import { adLeadRepository, UpdateAdLeadInput } from '../ad-leads/ad-leads.repository';
+import { userRepository, canBeTreatingClinician } from '../../repositories/user.repository';
 import { RequestScope } from '../../middleware/auth.middleware';
+import { withTransaction } from '../../db/pool';
 import { Errors } from '../../shared/errors';
 import { CreateEditRequestBody } from './edit-request.validators';
+import { notifyEditRequest } from '../../services/teams-notify.service';
 
 interface EntitySnapshot {
   entered_by:   string;
@@ -47,6 +50,17 @@ async function loadEntity(
       entry_date:   dateOnly(row.date_logged),
     };
   }
+  if (entityType === 'ad_lead') {
+    const row = await adLeadRepository.findRawById(entityId);
+    if (!row) return null;
+    return {
+      entered_by:   String(row.entered_by),
+      clinic_id:    row.clinic_id,
+      patient_name: row.patient_name,
+      // Ad-leads use date_added as their entry date (no date_logged column).
+      entry_date:   dateOnly(row.date_added),
+    };
+  }
   return null;
 }
 
@@ -60,7 +74,16 @@ export const editRequestService = {
     const entity = await loadEntity(body.entity_type, body.entity_id);
     if (!entity) throw Errors.notFound('Entry not found (it may have been deleted)');
 
-    if (entity.entered_by !== scope.userId) {
+    if (body.entity_type === 'ad_lead') {
+      // Ad-leads are a shared team inbox (many bulk-imported under one account),
+      // so ANY front-desk user who can SEE the lead may request edits — not just
+      // whoever first encoded it. Visibility mirrors ad-leads list scope:
+      // FRONT_DESK_GLOBAL sees every clinic; FRONT_DESK is pinned to their own.
+      const canSee =
+        scope.role === 'FRONT_DESK_GLOBAL' ||
+        (scope.role === 'FRONT_DESK' && entity.clinic_id === scope.clinic_id);
+      if (!canSee) throw Errors.forbidden('You cannot request edits for this lead');
+    } else if (entity.entered_by !== scope.userId) {
       throw Errors.forbidden('You can only request edits to your own entries');
     }
 
@@ -74,21 +97,56 @@ export const editRequestService = {
       if (!clinician || !clinician.is_active) {
         throw Errors.validation(`Clinician ${body.patch.clinician_id} not found or inactive`);
       }
-      if (clinician.role !== 'CLINICIAN') {
-        throw Errors.validation(`User ${body.patch.clinician_id} is not a clinician`);
+      if (!canBeTreatingClinician(clinician)) {
+        throw Errors.validation(
+          `${clinician.full_name || clinician.email} cannot be tagged as the treating clinician`
+        );
       }
     }
 
-    return editRequestRepository.create({
-      entity_type:  body.entity_type,
-      entity_id:    body.entity_id,
-      requested_by: scope.userId,
-      reason:       body.reason,
-      patch:        body.patch as Record<string, unknown>,
-      clinic_id:    entity.clinic_id,
-      patient_name: entity.patient_name,
-      entry_date:   entity.entry_date,
-    });
+    // Receptionist accounts (FRONT_DESK / FRONT_DESK_GLOBAL) have their
+    // front_staff_name stamped server-side on create/update — the approval
+    // flow must enforce the same rule, otherwise it becomes a side door for
+    // rewriting the stamped name.
+    const patch: Record<string, unknown> = { ...body.patch };
+    const isReceptionist =
+      scope.role === 'FRONT_DESK' || scope.role === 'FRONT_DESK_GLOBAL';
+    if (isReceptionist) delete patch.front_staff_name;
+    if (Object.keys(patch).length === 0) {
+      throw Errors.validation('Patch must contain at least one changed field');
+    }
+
+    try {
+      const created = await editRequestRepository.create({
+        entity_type:  body.entity_type,
+        entity_id:    body.entity_id,
+        requested_by: scope.userId,
+        reason:       body.reason,
+        patch,
+        clinic_id:    entity.clinic_id,
+        patient_name: entity.patient_name,
+        entry_date:   entity.entry_date,
+      });
+      // Ping the Teams group so the admin sees it without watching the queue.
+      // Fire-and-forget by design — a Teams outage must not fail this request.
+      notifyEditRequest({
+        entity_type:       created.entity_type,
+        patient_name:      created.patient_name,
+        entry_date:        created.entry_date,
+        clinic_id:         created.clinic_id,
+        reason:            created.reason,
+        patch:             created.patch,
+        requested_by_name: created.requested_by_name ?? scope.full_name,
+      });
+      return created;
+    } catch (err: any) {
+      // Unique partial index edit_requests_one_pending — a concurrent submit
+      // won the race between hasPending() and the INSERT. Surface as 409.
+      if (err?.code === '23505') {
+        throw Errors.conflict('An edit request for this entry is already pending admin approval');
+      }
+      throw err;
+    }
   },
 
   /** Admin review queue — pending requests, newest first. */
@@ -102,41 +160,59 @@ export const editRequestService = {
     return editRequestRepository.listPendingRefsByRequester(scope.userId);
   },
 
-  /** Admin approves → patch applied to the entry, request closed as approved. */
+  /** Admin approves → patch applied to the entry, request closed as approved.
+   *  Runs in ONE transaction with the request row locked FOR UPDATE, so a
+   *  concurrent approve/reject on the same request cannot interleave (no
+   *  double-apply, no "patched but rejected" state). */
   async approve(scope: RequestScope, id: string): Promise<void> {
     if (scope.role !== 'ADMIN') throw Errors.forbidden('Only ADMIN can approve edit requests');
 
-    const req = await editRequestRepository.findRawById(id);
-    if (!req) throw Errors.notFound(`Edit request ${id} not found`);
-    if (req.status !== 'pending') throw Errors.conflict(`Request already ${req.status}`);
+    await withTransaction(async (client) => {
+      const req = await editRequestRepository.findRawByIdForUpdate(client, id);
+      if (!req) throw Errors.notFound(`Edit request ${id} not found`);
+      if (req.status !== 'pending') throw Errors.conflict(`Request already ${req.status}`);
 
-    if (req.entity_type === 'case_acceptance') {
-      const existing = await caseAcceptanceRepository.findRawById(String(req.entity_id));
-      if (existing) {
-        const patch = req.patch as UpdateInput;
+      if (req.entity_type === 'case_acceptance') {
+        const existing = await caseAcceptanceRepository.findRawById(String(req.entity_id));
+        if (existing) {
+          const patch = req.patch as UpdateInput;
 
-        // Cross-field invariant: booked <= recs on the merged result.
-        const nextRecs   = (patch.case_recommendations ?? existing.case_recommendations) as number;
-        const nextBooked = (patch.appointments_booked  ?? existing.appointments_booked)  as number;
-        if (nextBooked > nextRecs) {
-          throw Errors.validation(
-            'Cannot apply patch: booked would exceed case recommendations — reject this request instead'
+          // Cross-field invariant: booked <= recs on the merged result.
+          const nextRecs   = (patch.case_recommendations ?? existing.case_recommendations) as number;
+          const nextBooked = (patch.appointments_booked  ?? existing.appointments_booked)  as number;
+          if (nextBooked > nextRecs) {
+            throw Errors.validation(
+              'Cannot apply patch: booked would exceed case recommendations — reject this request instead'
+            );
+          }
+
+          await caseAcceptanceRepository.update(String(req.entity_id), patch, scope.userId, client);
+        }
+        // If the entry is already gone, close the request without error (it's harmless).
+      }
+
+      if (req.entity_type === 'dropout') {
+        const existing = await dropoutRepository.findRawById(String(req.entity_id));
+        if (existing) {
+          await dropoutRepository.update(
+            String(req.entity_id), req.patch as UpdateDropoutInput, scope.userId, client
           );
         }
-
-        await caseAcceptanceRepository.update(String(req.entity_id), patch, scope.userId);
       }
-      // If the entry is already gone, close the request without error (it's harmless).
-    }
 
-    if (req.entity_type === 'dropout') {
-      const existing = await dropoutRepository.findRawById(String(req.entity_id));
-      if (existing) {
-        await dropoutRepository.update(String(req.entity_id), req.patch as UpdateDropoutInput, scope.userId);
+      if (req.entity_type === 'ad_lead') {
+        const existing = await adLeadRepository.findRawById(String(req.entity_id));
+        if (existing) {
+          await adLeadRepository.update(
+            String(req.entity_id), req.patch as UpdateAdLeadInput, scope.userId, client
+          );
+        }
+        // If the lead is already gone, close the request without error.
       }
-    }
 
-    await editRequestRepository.setStatus(id, 'approved', scope.userId);
+      const closed = await editRequestRepository.setStatus(id, 'approved', scope.userId, null, client);
+      if (!closed) throw Errors.conflict('Request was reviewed by someone else — refresh and try again');
+    });
   },
 
   /** Admin rejects → entry stays unchanged, request closed as rejected with a mandatory reason. */
@@ -147,7 +223,10 @@ export const editRequestService = {
     if (!req) throw Errors.notFound(`Edit request ${id} not found`);
     if (req.status !== 'pending') throw Errors.conflict(`Request already ${req.status}`);
 
-    await editRequestRepository.setStatus(id, 'rejected', scope.userId, rejectionReason);
+    // Guarded UPDATE (status = 'pending') — if a concurrent admin already
+    // reviewed it, do NOT overwrite their decision.
+    const closed = await editRequestRepository.setStatus(id, 'rejected', scope.userId, rejectionReason);
+    if (!closed) throw Errors.conflict('Request was reviewed by someone else — refresh and try again');
   },
 
   /** Rejected requests for the caller within the last 30 days — drives the notification banner. */

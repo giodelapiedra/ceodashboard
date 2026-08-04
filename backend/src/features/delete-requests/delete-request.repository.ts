@@ -1,7 +1,8 @@
+import { PoolClient } from 'pg';
 import { query } from '../../db/pool';
 
-export type DeleteEntityType = 'dropout' | 'case_acceptance';
-export const DELETE_ENTITY_TYPES: readonly DeleteEntityType[] = ['dropout', 'case_acceptance'];
+export type DeleteEntityType = 'dropout' | 'case_acceptance' | 'ad_lead';
+export const DELETE_ENTITY_TYPES: readonly DeleteEntityType[] = ['dropout', 'case_acceptance', 'ad_lead'];
 
 export type DeleteRequestStatus = 'pending' | 'approved' | 'rejected';
 
@@ -138,6 +139,16 @@ export const deleteRequestRepository = {
     return rows[0] ?? null;
   },
 
+  /** Raw row locked FOR UPDATE — must be called inside a transaction. Serializes
+   *  concurrent approve/reject on the same request so only one wins. */
+  async findRawByIdForUpdate(client: PoolClient, id: string): Promise<DeleteRequestRow | null> {
+    const { rows } = await client.query<DeleteRequestRow>(
+      `SELECT * FROM delete_requests WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    return rows[0] ?? null;
+  },
+
   async listByStatus(status: DeleteRequestStatus): Promise<DeleteRequestDTO[]> {
     const { rows } = await query<DeleteRequestJoinedRow>(
       `${SELECT_JOINED} WHERE dr.status = $1 ORDER BY dr.created_at DESC`,
@@ -158,16 +169,21 @@ export const deleteRequestRepository = {
     return rows;
   },
 
+  /** Close a PENDING request. The `AND status = 'pending'` guard means a
+   *  request already reviewed by a concurrent admin is never silently
+   *  overwritten — returns false so the caller can 409.
+   *  Optional `client` runs it inside the approval transaction. */
   async setStatus(
     id: string,
     status: Exclude<DeleteRequestStatus, 'pending'>,
-    reviewedBy: string
-  ): Promise<void> {
-    await query(
-      `UPDATE delete_requests
+    reviewedBy: string,
+    client?: PoolClient
+  ): Promise<boolean> {
+    const sql = `UPDATE delete_requests
           SET status = $2, reviewed_by = $3, reviewed_at = NOW(), updated_at = NOW()
-        WHERE id = $1`,
-      [id, status, reviewedBy]
-    );
+        WHERE id = $1 AND status = 'pending'`;
+    const params = [id, status, reviewedBy];
+    const result = client ? await client.query(sql, params) : await query(sql, params);
+    return (result.rowCount ?? 0) > 0;
   },
 };

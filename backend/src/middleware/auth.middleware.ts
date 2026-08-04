@@ -15,6 +15,10 @@ export interface RequestScope {
   /** Display name from the user account. Used by services to stamp
    *  front_staff_name on entries created by receptionist logins. */
   full_name: string | null;
+  /** Login email. Always set for real requests (from the JWT); optional so the
+   *  internal "act as ADMIN" scope literals in repos don't need to supply it.
+   *  Used to gate account-specific access (e.g. the Meta/Google Leads section). */
+  email?:    string;
 }
 
 export interface AuthRequest extends Request {
@@ -41,6 +45,7 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     role:      payload.role,
     clinic_id: payload.clinic_id,
     full_name: payload.full_name,
+    email:     payload.email,
   };
   next();
 }

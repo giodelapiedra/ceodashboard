@@ -4,6 +4,7 @@ import { usersApi } from '../../api/users.api'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import { promptDialog } from '../../store/prompt.store'
+import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
 import { CLINIC_LABEL, ClinicId, User } from '../../types'
 import AppShell from '../shared/AppShell'
 
@@ -24,12 +25,20 @@ const FIELD_LABEL: Record<string, string> = {
   appointments_booked:         'Appointments booked',
   prepay_offered:              'Prepay offered',
   prepay_accepted:             'Prepay accepted',
-  transition_notes:            'Transition notes',
+  transition_notes:            'Treatment Plan notes',
   notes:                       'Notes',
   // dropout fields
   status:                      'Status',
   reason:                      'Reason',
   appointment_cancelled_dates: 'Cancelled dates',
+  // ad_lead fields
+  platform:                    'Platform',
+  campaign_name:               'Campaign',
+  date_added:                  'Date added',
+  booked:                      'Booked?',
+  bella_called:                'Bella called?',
+  bella_sms:                   'Bella followed up?',
+  bella_remarks:               'Bella remarks',
 }
 
 function formatValue(key: string, val: unknown, clinicians: User[]): string {
@@ -68,6 +77,8 @@ export default function EditRequestsPage() {
       ])
       setRows(data)
       setClinicians(staff)
+      // Keep the header bar / menu badges honest without a second round-trip.
+      usePendingApprovalsStore.getState().setEditCount(data.length)
     } catch (e: any) {
       setError(e.response?.data?.error?.message || 'Failed to load edit requests')
     } finally { setLoading(false) }

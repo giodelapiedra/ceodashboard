@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import {
   adSpendApi,
-  CreateAdSpendPayload, UpdateAdSpendPayload, AdSpendSummary, WeeklyReportRow,
+  CreateAdSpendPayload, UpdateAdSpendPayload, AdSpendSummary, WeeklyReportRow, LeadsRoi,
 } from '../../api/adSpend.api'
 import { AdSpendDTO, AD_CHANNELS, AdChannel } from '../../types'
 import { useAuthStore } from '../../store/auth.store'
@@ -9,6 +9,7 @@ import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
+import DateRangePicker from '../shared/DateRangePicker'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { usePaginationParams } from '../../hooks/usePaginationParams'
 
@@ -310,18 +311,14 @@ function WeeklyReportTab() {
 
   return (
     <div>
-      {/* Controls */}
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16, flexWrap:'wrap' }}>
-        <span style={{ fontSize:12, color:TEXT_SOFT, fontWeight:500 }}>From</span>
-        <input type="date" value={range.from}
-          onChange={e => setRange(r => ({ ...r, from: e.target.value }))}
-          style={{ ...inputStyle, width:150, fontSize:12 }} />
-        <span style={{ fontSize:12, color:TEXT_SOFT, fontWeight:500 }}>To</span>
-        <input type="date" value={range.to}
-          onChange={e => setRange(r => ({ ...r, to: e.target.value }))}
-          style={{ ...inputStyle, width:150, fontSize:12 }} />
+      {/* Controls — same DateRangePicker as the dropout / leads pages */}
+      <div style={{ display:'flex', alignItems:'flex-end', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+          <span style={{ fontSize:11, color:TEXT_SOFT, fontWeight:500 }}>Date range</span>
+          <DateRangePicker value={range} onChange={setRange} />
+        </div>
         <button onClick={load} disabled={loading}
-          style={{ ...primaryBtnStyle, padding:'7px 16px', fontSize:12 }}>
+          style={{ ...primaryBtnStyle, padding:'9px 16px', fontSize:12 }}>
           {loading ? 'Loading…' : '↻ Refresh'}
         </button>
       </div>
@@ -497,12 +494,28 @@ export default function AdSpendEntryPage() {
 
   const isEditable = (row: AdSpendDTO) => isAdmin || row.entered_by === user.id
 
+  // ── Leads Paid vs Spend (ADMIN only) ──
+  // Nookal Paid of booked Meta/Google leads vs ad spend per platform. Paid
+  // side comes from the values the "Sync Paid (Nookal)" button on the Leads
+  // page saved — cheap SQL here, no Nookal calls. All-time by default; the
+  // range picker windows both sides (leads by Date Added, spend by spend date).
+  const [roi, setRoi]           = useState<LeadsRoi | null>(null)
+  const [roiRange, setRoiRange] = useState({ from: '', to: '' })
+  const loadRoi = useCallback(() => {
+    if (!isAdmin) return
+    adSpendApi.leadsRoi(roiRange.from, roiRange.to)
+      .then(setRoi).catch(() => { /* card row just stays hidden */ })
+  }, [isAdmin, roiRange])
+  useEffect(() => { loadRoi() }, [loadRoi])
+
   // ── Ads sync (ADMIN only) ──
   const [syncing,      setSyncing]      = useState(false)
   const [syncingFb,    setSyncingFb]    = useState(false)
   const [syncResult,   setSyncResult]   = useState<string | null>(null)
-  const [syncFrom,     setSyncFrom]     = useState(() => `${new Date().getFullYear()}-01-01`)
-  const [syncTo,       setSyncTo]       = useState(todayISO)
+  // Sync always covers the full current year (Jan 1 → today) — no range UI;
+  // the page's other filters handle narrowing what you LOOK at, not what syncs.
+  const syncFrom = `${new Date().getFullYear()}-01-01`
+  const syncTo   = todayISO()
 
   const onSyncGoogle = async () => {
     setSyncing(true); setSyncResult(null)
@@ -514,6 +527,7 @@ export default function AdSpendEntryPage() {
       setSyncResult(msg)
       toast.success(msg)
       await loadEntries()
+      loadRoi()
     } catch (e: any) {
       const msg = e.response?.data?.error?.message || 'Google Ads sync failed'
       setSyncResult(msg); toast.error(msg)
@@ -530,6 +544,7 @@ export default function AdSpendEntryPage() {
       setSyncResult(msg)
       toast.success(msg)
       await loadEntries()
+      loadRoi()
     } catch (e: any) {
       const msg = e.response?.data?.error?.message || 'Facebook Ads sync failed'
       setSyncResult(msg); toast.error(msg)
@@ -561,17 +576,33 @@ export default function AdSpendEntryPage() {
               style={{ background: syncingFb ? '#9ca3af' : '#1877f2', color:'#fff', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: syncingFb ? 'not-allowed' : 'pointer', fontFamily:"'DM Sans',sans-serif", whiteSpace:'nowrap' }}>
               {syncingFb ? 'Syncing...' : 'Sync Facebook Ads'}
             </button>
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>From</span>
-              <input type="date" value={syncFrom} onChange={e => setSyncFrom(e.target.value)}
-                style={{ ...inputStyle, width:145, fontSize:12 }} />
-              <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>To</span>
-              <input type="date" value={syncTo} onChange={e => setSyncTo(e.target.value)}
-                style={{ ...inputStyle, width:145, fontSize:12 }} />
+            {syncResult && (
+              <span style={{ fontSize:12, color: syncResult.includes('failed') || syncResult.includes('No ') ? '#b91c1c' : TEAL, flex:1 }}>
+                {syncResult}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Leads Paid vs Spend — ADMIN only, all-time unless a range is picked */}
+        {isAdmin && roi && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8, flexWrap:'wrap' }}>
+              <span style={{ fontSize:13, fontWeight:700, color:TEXT }}>Leads Paid vs Spend</span>
+              <DateRangePicker value={roiRange} onChange={setRoiRange} allowAllTime />
             </div>
-            <span style={{ fontSize:12, color: syncResult ? (syncResult.includes('failed') || syncResult.includes('No ') ? '#b91c1c' : TEAL) : TEXT_SOFT, flex:1 }}>
-              {syncResult ?? 'Default: Jan 1 → today (full year). Change dates to sync a specific range.'}
-            </span>
+            <div className="pw-grid-2" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <RoiCard label="Google" group={roi.google} />
+              <RoiCard label="Meta (Facebook)" group={roi.meta} />
+            </div>
+            <div style={{ fontSize:11, color:TEXT_SOFT, marginTop:6 }}>
+              {roiRange.from || roiRange.to
+                ? `${roiRange.from} → ${roiRange.to} · leads counted by Date Added (each keeps its full Nookal Paid), spend by spend date.`
+                : 'All time · Paid (Nookal) totals of booked Meta/Google leads vs total ad spend per platform.'}
+              {roi.synced_at
+                ? ` Leads last synced ${new Date(roi.synced_at).toLocaleString()} — use Sync Paid (Nookal) on the Leads page to refresh.`
+                : ' No leads synced yet — click Sync Paid (Nookal) on the Leads page first.'}
+            </div>
           </div>
         )}
 
@@ -649,22 +680,14 @@ export default function AdSpendEntryPage() {
 
             <div style={{ background:'#fff', border:`1px solid ${BORDER}`, borderRadius:10, overflow:'hidden' }}>
               <div style={{ padding:'12px 16px', background:'#f9fafb', borderBottom:`1px solid ${BORDER}`, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-                {/* Date range filter */}
+                {/* Date range filter — same picker as Dropouts / Case Acceptance, plus All time */}
                 <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                  <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>From</span>
-                  <input type="date" value={dateFrom}
-                    onChange={e => setDateFrom(e.target.value)}
-                    style={{ ...inputStyle, width:140, fontSize:12 }} />
-                  <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>To</span>
-                  <input type="date" value={dateTo}
-                    onChange={e => setDateTo(e.target.value)}
-                    style={{ ...inputStyle, width:140, fontSize:12 }} />
-                  {(dateFrom || dateTo) && (
-                    <button onClick={() => { setDateFrom(''); setDateTo('') }}
-                      style={{ ...smallBtnStyle, fontSize:11, padding:'4px 10px', color:TEXT_SOFT }}>
-                      Clear
-                    </button>
-                  )}
+                  <span style={{ fontSize:11, fontWeight:600, color:TEXT_SOFT, textTransform:'uppercase', letterSpacing:'0.05em' }}>Date range</span>
+                  <DateRangePicker
+                    value={{ from: dateFrom, to: dateTo }}
+                    onChange={r => { setDateFrom(r.from); setDateTo(r.to) }}
+                    allowAllTime
+                  />
                 </div>
 
                 <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:8 }}>
@@ -738,6 +761,37 @@ export default function AdSpendEntryPage() {
 }
 
 // ── Shared sub-components ─────────────────────────────────────
+/** One platform group of the "Leads Paid vs Spend" strip: revenue the synced
+ *  booked leads have paid in Nookal, minus what the ads on that platform cost. */
+function RoiCard({ label, group }: { label: string; group: LeadsRoi['google'] }) {
+  const net = group.net
+  const netColor = net > 0 ? TEAL : net < 0 ? DANGER : TEXT_SOFT
+  return (
+    <div style={{ background:'#fff', border:`1px solid ${BORDER}`, borderRadius:10, padding:'14px 18px' }}>
+      <div style={{ fontSize:11, color:TEXT_SOFT, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase' }}>
+        {label} — Leads Paid vs Spend
+      </div>
+      <div className="pw-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginTop:8 }}>
+        <div>
+          <div style={{ fontSize:11, color:TEXT_SOFT }}>Paid (Nookal)</div>
+          <div style={{ fontSize:18, fontWeight:700, color:TEXT, fontFamily:"'DM Sans',sans-serif" }}>{AUD.format(group.paid)}</div>
+          <div style={{ fontSize:11, color:TEXT_SOFT }}>{group.leads} matched lead{group.leads === 1 ? '' : 's'}</div>
+        </div>
+        <div>
+          <div style={{ fontSize:11, color:TEXT_SOFT }}>Ad Spend</div>
+          <div style={{ fontSize:18, fontWeight:700, color:TEXT, fontFamily:"'DM Sans',sans-serif" }}>{AUD.format(group.spend)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize:11, color:TEXT_SOFT }}>Net</div>
+          <div style={{ fontSize:18, fontWeight:700, color:netColor, fontFamily:"'DM Sans',sans-serif" }}>
+            {net > 0 ? '+' : ''}{AUD.format(net)}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SummaryCards({ summary }: { summary: AdSpendSummary | null }) {
   const loaded = summary !== null
   const topCh = loaded ? Object.entries(summary!.byChannel).sort((a,b) => b[1]-a[1])[0] : undefined

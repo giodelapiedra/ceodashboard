@@ -44,5 +44,11 @@ export const listAdSpendQuerySchema = z.object({
   offset:    z.coerce.number().int().min(0).optional(),
 });
 
+// Optional window for the Leads Paid vs Spend cards (absent = all-time).
+export const leadsRoiQuerySchema = z.object({
+  date_from: isoDate.optional(),
+  date_to:   isoDate.optional(),
+});
+
 export type CreateAdSpendBody = z.infer<typeof createAdSpendSchema>;
 export type UpdateAdSpendBody = z.infer<typeof updateAdSpendSchema>;

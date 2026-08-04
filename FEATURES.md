@@ -109,11 +109,37 @@
 - Reusable AppShell nav (role-based menu tree), collapsible groups
 - Toast notifications (success / error / info)
 - Confirm + prompt dialogs
+- **Duplicate guard** (dropouts, case acceptance, ad leads) — tingnan ang §12
 - Date-range picker, pagination, debounced search
 - XLSX export (dropouts, case acceptance)
 - Print support (CEO dashboard)
 - Loading/error states, form validation
 - Health check endpoint (`GET /api/health`)
+
+## 12. Duplicate Guard (Dropouts · Case Acceptance · Ad Leads)
+Pumipigil sa dobleng entry ng parehong bagay, pero hindi bumabara sa mga tunay na hindi duplicate.
+
+**Natural key** (pareho lahat = duplicate). Ang pangalan ay ni-no-normalize muna: lowercase, trim, at ini-isa ang sunod-sunod na space — kaya `"cedric  ADAMS "` = `"Cedric Adams"`.
+| Form | Key |
+|------|-----|
+| Dropouts | clinic + clinician + patient + `date_logged` |
+| Case Acceptance | clinic + clinician + patient + `date_logged` |
+| Ad Leads | clinic + patient + **platform** + `date_added` (magkaibang platform sa parehong araw = dalawang tunay na lead) |
+
+**Dalawang tier**
+- **Exact** — pareho ang natural key → lalabas ang **Duplicate dialog** na may field-by-field diff (existing vs. bagong tina-type), tapos 3 pagpipilian: **Overwrite** · **Hindi duplicate — save separately** · **Cancel**. Cancel ang default (Esc / click sa labas); walang Enter shortcut para hindi masagi ang overwrite.
+- **Similar** — parehong patient sa parehong clinic sa loob ng ±14 araw pero ibang clinician/date/platform → babala lang, hindi bumabara (kadalasan mali lang ang na-type na petsa).
+
+**Sino ang pwedeng mag-overwrite** — walang binabagong permission rule:
+| Form | Overwrite nang diretso | Kapag hindi pwede |
+|------|------------------------|-------------------|
+| Dropouts | ADMIN, o kung sarili mong entry | Awtomatikong nagiging **edit request** (kailangan ng admin approval) |
+| Case Acceptance | ADMIN lang | Laging edit request |
+| Ad Leads | ADMIN, o kung sarili mong entry | Edit request |
+
+**Ligtas sa double-click / sabay na encoder** — hindi lang client-side check ito. Ang totoong check ay nasa server sa loob ng isang transaction na may `pg_advisory_xact_lock()` sa natural key, kaya dalawang sabay na POST ay hindi pwedeng parehong makalusot. Ang pre-flight check sa browser ay para sa UI lang; kapag may nakaunang mag-save sa pagitan ng check at ng save, 409 ang isasagot ng server (kasama ang existing row) at lalabas ulit ang parehong dialog.
+
+Walang UNIQUE constraint sa DB — sadya, dahil pinapayagan ang "hindi naman talaga duplicate". Bawat overwrite ay may `*.overwrite` na audit-log entry kasama ang **before** at **after** values, kaya nababawi ang naipatong.
 
 ---
 
@@ -121,8 +147,9 @@
 - **Auth:** `/api/auth/login`, `/refresh`, `/logout`, `/me`, `/change-password`
 - **Dashboard:** `/api/dashboard/clinics`, `/monthly`, `/week`, `/ageing-debts`, `/revenue`, `/cash-insurance`, `/upfront-revenue`, `/patient-metrics`
 - **Users:** `/api/users` (CRUD), `/staff`, `/:id/password`, `/:id/deactivate`, `/:id/reactivate`
-- **Dropouts:** `/api/dropouts` (CRUD), `/summary`
-- **Case Acceptance:** `/api/case-acceptance` (CRUD), `/summary`, `/export`
+- **Dropouts:** `/api/dropouts` (CRUD), `/summary`, `/check-duplicate`
+- **Case Acceptance:** `/api/case-acceptance` (CRUD), `/summary`, `/export`, `/check-duplicate`
+- **Ad Leads:** `/api/ad-leads` (CRUD), `/summary`, `/check-duplicate`
 - **Ad Spend:** `/api/ad-spend` (CRUD), `/summary`, `/weekly-report`, `/sync-facebook`, `/sync-google`
 - **Audit Log:** `/api/audit-log`, `/actions`
 - **Health:** `/api/health`

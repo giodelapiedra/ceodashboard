@@ -13,6 +13,24 @@ export const ROLES = {
 
 export type Role = typeof ROLES[keyof typeof ROLES];
 
+// Front-desk accounts allowed into the Meta/Google Leads (ad-leads) section.
+// It is NOT a role — only these specific logins may encode/view leads; every
+// other front-desk account has no access at all. Mirrored in frontend types.ts.
+export const AD_LEADS_ENCODER_EMAILS: readonly string[] = [
+  'bella@physioward.com.au',
+];
+
+/**
+ * Who may touch the Meta/Google Leads section. ADMIN always can (read-only
+ * admin view); front-desk logins only if explicitly allow-listed above.
+ * Everyone else (CLINICIAN, ADSPEND, non-listed front desk) is denied.
+ */
+export function canAccessAdLeads(role: Role, email: string | null | undefined): boolean {
+  if (role === 'ADMIN') return true;
+  if (role !== 'FRONT_DESK' && role !== 'FRONT_DESK_GLOBAL') return false;
+  return !!email && AD_LEADS_ENCODER_EMAILS.includes(email.toLowerCase());
+}
+
 export const ROLE_VALUES: readonly Role[] =
   Object.values(ROLES) as readonly Role[];
 
@@ -42,18 +60,15 @@ export type DropoutStatus = typeof DROPOUT_STATUSES[number];
 // are recorded by name only. "Other - Physio" covers the case where a clinician
 // (any clinician) took the call themselves.
 export const FRONT_STAFF_NAMES = [
-  'Tanya',
+  'Ann Maree',
   'Bella',
-  'Sandra',
-  'AM',
-  'Jenny',
-  'Teresa',
-  'Ben',
-  'Other - Physio',
-  'Carolyn',
-  'Vanessa',
+  'Brooke',
   'Holly',
+  'Jenny',
+  'Tanya',
   'Tilly',
+  'Vanessa',
+  'Other - Physio',
 ] as const;
 export type FrontStaffName = typeof FRONT_STAFF_NAMES[number];
 
@@ -75,6 +90,38 @@ export type AdChannel = typeof AD_CHANNELS[number];
 
 export function isAdChannel(value: unknown): value is AdChannel {
   return typeof value === 'string' && (AD_CHANNELS as readonly string[]).includes(value);
+}
+
+// Ad-lead platforms for the Meta/Google ADS Leads feature. EXACT copy of the
+// sheet's "Platform Source" dropdown (same options, same order) so the entry
+// form is gayang-gaya with the source. The DB column is NOT constrained to
+// these so the importer can preserve any historical value verbatim.
+// Mirrored on the frontend in types.ts.
+export const AD_LEAD_PLATFORMS = [
+  'Facebook Lead Form Ads',
+  'FB Athlete Landing Page Ad',
+  'Google Ads',
+  'FB Paid Ad Quiz',
+  "FB Over 40's Landing Page Ad",
+] as const;
+export type AdLeadPlatform = typeof AD_LEAD_PLATFORMS[number];
+
+// EXACT copy of the sheet's "Bella Called?" / "Bella SMS?" dropdowns. Used to
+// populate those selects on the entry form. The DB stores free text (the
+// validator stays lenient) so imported/legacy values are never rejected.
+export const BELLA_CONTACT_OPTIONS = [
+  'Y',
+  'N',
+  'already booked in',
+  'booked in during call',
+  'Double called and left message',
+  'Triple called within 24 hours',
+  'Not interested',
+] as const;
+export type BellaContactOption = typeof BELLA_CONTACT_OPTIONS[number];
+
+export function isAdLeadPlatform(value: unknown): value is AdLeadPlatform {
+  return typeof value === 'string' && (AD_LEAD_PLATFORMS as readonly string[]).includes(value);
 }
 
 export const DROPOUT_REASONS = [

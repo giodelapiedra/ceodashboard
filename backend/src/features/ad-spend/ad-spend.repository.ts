@@ -342,4 +342,64 @@ export const adSpendRepository = {
     }
     return map;
   },
+
+  /**
+   * All-time "Paid (Nookal) vs ad spend" per platform group for the ad-spend
+   * page. Paid side: stored nookal_paid of booked, cleanly-matched ad leads,
+   * split by keyword — any platform naming Google is 'google'; EVERYTHING
+   * else ('Facebook Lead Form Ads', 'FB Athlete Landing Page Ad', 'FB Paid
+   * Ad Quiz', "FB Over 40's Landing Page Ad", and any future FB variant the
+   * unconstrained platform column picks up) lands in 'meta', so no lead is
+   * ever dropped from the totals.
+   * Spend side: ad_spend totals for the matching channels. Net = paid − spend.
+   * Default is all-time — a lead booked in April keeps paying in July, so
+   * that stays the headline view. An optional date window narrows BOTH sides:
+   * leads by their Date Added, spend rows by spend_date. A filtered lead
+   * still contributes its full (all-time) Nookal Paid — per-payment dates
+   * aren't stored, only the account total per lead.
+   */
+  async leadsRoi(dateFrom: string | null = null, dateTo: string | null = null): Promise<{
+    google: { paid: number; leads: number; spend: number; net: number };
+    meta:   { paid: number; leads: number; spend: number; net: number };
+    synced_at: string | null;
+  }> {
+    const range = [dateFrom, dateTo];
+    const [paidRes, spendRes, syncRes] = await Promise.all([
+      query<{ grp: string; paid: string; leads: string }>(
+        `SELECT CASE WHEN platform ILIKE '%google%' THEN 'google' ELSE 'meta' END AS grp,
+                COALESCE(SUM(nookal_paid), 0)::numeric AS paid,
+                COUNT(*)::bigint                       AS leads
+           FROM ad_leads
+          WHERE booked = true AND nookal_status = 'matched' AND nookal_paid IS NOT NULL
+            AND ($1::date IS NULL OR date_added >= $1::date)
+            AND ($2::date IS NULL OR date_added <= $2::date)
+          GROUP BY grp`, range),
+      query<{ grp: string; spend: string }>(
+        `SELECT CASE WHEN channel = 'Google' THEN 'google' ELSE 'meta' END AS grp,
+                COALESCE(SUM(amount), 0)::numeric AS spend
+           FROM ad_spend
+          WHERE channel IN ('Google', 'Facebook')
+            AND ($1::date IS NULL OR spend_date >= $1::date)
+            AND ($2::date IS NULL OR spend_date <= $2::date)
+          GROUP BY grp`, range),
+      query<{ synced_at: Date | null }>(
+        `SELECT MAX(nookal_synced_at) AS synced_at FROM ad_leads`),
+    ]);
+
+    const base = () => ({ paid: 0, leads: 0, spend: 0, net: 0 });
+    const out = { google: base(), meta: base() };
+    for (const r of paidRes.rows) {
+      const g = r.grp === 'google' ? out.google : out.meta;
+      g.paid  = Number(r.paid);
+      g.leads = Number(r.leads);
+    }
+    for (const r of spendRes.rows) {
+      const g = r.grp === 'google' ? out.google : out.meta;
+      g.spend = Number(r.spend);
+    }
+    out.google.net = Math.round((out.google.paid - out.google.spend) * 100) / 100;
+    out.meta.net   = Math.round((out.meta.paid   - out.meta.spend)   * 100) / 100;
+
+    return { ...out, synced_at: syncRes.rows[0]?.synced_at?.toISOString() ?? null };
+  },
 };

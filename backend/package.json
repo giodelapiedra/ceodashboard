@@ -14,7 +14,9 @@
     "db:import:dropouts": "ts-node-dev --transpile-only src/db/import-dropouts-2026.ts",
     "db:import:case-acceptance": "ts-node-dev --transpile-only src/db/import-case-acceptance.ts",
     "db:import:dropouts:gsheets": "ts-node-dev --transpile-only src/db/import-dropouts-gsheets.ts",
-    "db:import:case-acceptance:gsheets": "ts-node-dev --transpile-only src/db/import-case-acceptance-gsheets.ts"
+    "db:import:case-acceptance:gsheets": "ts-node-dev --transpile-only src/db/import-case-acceptance-gsheets.ts",
+    "db:import:ad-leads:gsheets": "ts-node-dev --transpile-only src/db/import-ad-leads-gsheets.ts",
+    "notify:weekly:teams": "ts-node-dev --transpile-only src/scripts/notify-weekly-teams.ts"
   },
   "dependencies": {
     "axios": "^1.6.0",

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { deleteRequestsApi, DeleteRequestDTO, DeleteEntityType } from '../../api/deleteRequests.api'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
+import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
 import { CLINIC_LABEL, ClinicId } from '../../types'
 import AppShell from '../shared/AppShell'
 
@@ -14,6 +15,14 @@ const DANGER    = '#b91c1c'
 const KIND_LABEL: Record<DeleteEntityType, string> = {
   dropout:         'Patient Dropout',
   case_acceptance: 'Case Acceptance',
+  ad_lead:         'Meta/Google ADS Lead',
+}
+
+// Pill colours per entity type.
+const KIND_COLORS: Record<DeleteEntityType, { bg: string; fg: string; bd: string }> = {
+  dropout:         { bg: '#eef2ff', fg: '#3730a3', bd: '#c7d2fe' },
+  case_acceptance: { bg: '#f0faf7', fg: TEAL,      bd: '#cdebde' },
+  ad_lead:         { bg: '#fef3c7', fg: '#92400e', bd: '#fde68a' },
 }
 
 function ago(iso: string): string {
@@ -34,7 +43,10 @@ export default function DeleteRequestsPage() {
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      setRows(await deleteRequestsApi.listPending())
+      const data = await deleteRequestsApi.listPending()
+      setRows(data)
+      // Keep the header bar / menu badges honest without a second round-trip.
+      usePendingApprovalsStore.getState().setDeleteCount(data.length)
     } catch (e: any) {
       setError(e.response?.data?.error?.message || 'Failed to load delete requests')
     } finally { setLoading(false) }
@@ -160,12 +172,10 @@ export default function DeleteRequestsPage() {
 }
 
 function KindPill({ kind }: { kind: DeleteEntityType }) {
-  const isDropout = kind === 'dropout'
+  const c = KIND_COLORS[kind]
   return (
     <span style={{
-      background:   isDropout ? '#eef2ff' : '#f0faf7',
-      color:        isDropout ? '#3730a3' : TEAL,
-      border: `1px solid ${isDropout ? '#c7d2fe' : '#cdebde'}`,
+      background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
       padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
     }}>{KIND_LABEL[kind]}</span>
   )

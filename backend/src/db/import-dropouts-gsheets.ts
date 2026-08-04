@@ -51,7 +51,7 @@ const CLINIC_CONFIGS: Record<string, ClinicConfig> = {
     sheetTab:         "'Daily Patient Dropout Tracking'!A:I",
     clinicianAliases: { Zac: 'Zach' },
     clinicianSkips:   ['Reformer Bed', 'Sam', 'Other - Physio'],
-    reasonAliases:    { 'Work': 'Work Commitments', 'Physio Discharged': 'Discharged' },
+    reasonAliases:    { 'Work': 'Work Commitments', 'Physio Discharged': 'Discharged', 'School': 'Other' },
     frontStaffAliases:{ 'No reception': null, 'Front of staff name': null },
   },
   brookvale: {
@@ -124,6 +124,36 @@ function pad2(n: string | number): string {
   return String(n).padStart(2, '0');
 }
 
+function daysInMonth(year: number, month: number): number {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
+}
+
+/**
+ * Assemble an AU-format (day, month) date into YYYY-MM-DD, but only if it's a
+ * REAL calendar date. A structurally-valid-looking but impossible date (e.g.
+ * month 13 from a swapped US-format entry) passes the dry-run's format check
+ * and then aborts the whole COMMIT transaction at INSERT time (Postgres rejects
+ * "2026-13-07"), silently blocking the entire import.
+ *
+ *  1. US-format repair: these sheets are AU D/M/Y, so a "month" > 12 is an
+ *     unambiguous month/day swap (someone typed 07/13/2026 = 13 July). Swap it.
+ *  2. Anything still out of range returns null → caller skips + reports the row.
+ *
+ * `yyyy` stays a string so run()'s wrong-year coercion (which slices a 4-char
+ * year) keeps working for typo years like "0206".
+ */
+function assembleDate(day: number, month: number, yyyy: string): string | null {
+  const rawDay = day, rawMonth = month;
+  if (month > 12 && day <= 12) { const t = day; day = month; month = t; }
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(parseInt(yyyy, 10), month)) return null;
+  if (rawMonth !== month) {
+    console.log(`  [date-repair] month>12 → read ${rawDay}/${rawMonth}/${yyyy} as AU d/m → ${yyyy}-${pad2(month)}-${pad2(day)}`);
+  }
+  return `${yyyy}-${pad2(month)}-${pad2(day)}`;
+}
+
 /**
  * Parse date_logged from the Google Sheets formatted string.
  * The sheet uses Australian locale so cells display as D/M/YYYY.
@@ -136,20 +166,20 @@ function parseDateLogged(raw: string | undefined | null): string | null {
 
   // ISO YYYY-MM-DD (or with time)
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return s.slice(0, 10);
+  if (m) return assembleDate(parseInt(m[3], 10), parseInt(m[2], 10), m[1]);
 
   // Australian D/M/YYYY or D/M/YY
   m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m) {
     const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), yyyy);
   }
 
   // D.M.YYYY fallback
   m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (m) {
     const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), yyyy);
   }
 
   return null;
@@ -164,15 +194,15 @@ function parseDateToken(tok: string, sharedMonth: number | null): string | null 
   let m = tok.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})$/);
   if (m) {
     const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), yyyy);
   }
   // DD.MM or DD/MM
   m = tok.match(/^(\d{1,2})[\/.](\d{1,2})$/);
-  if (m) return `${SOURCE_YEAR}-${pad2(m[2])}-${pad2(m[1])}`;
+  if (m) return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), String(SOURCE_YEAR));
   // Bare day — inherits month from the next anchored token in the same cell
   m = tok.match(/^(\d{1,2})$/);
   if (m && sharedMonth !== null) {
-    return `${SOURCE_YEAR}-${pad2(sharedMonth)}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), sharedMonth, String(SOURCE_YEAR));
   }
   return null;
 }
@@ -228,7 +258,8 @@ function parseApptCancelled(raw: string | undefined | null): string[] {
     for (let k = i; k < j; k++) {
       const bare = tokens[k].match(/^(\d{1,2})$/);
       if (bare) {
-        out.push(`${SOURCE_YEAR}-${pad2(sharedMonth)}-${pad2(bare[1])}`);
+        const d = assembleDate(parseInt(bare[1], 10), sharedMonth, String(SOURCE_YEAR));
+        if (d) out.push(d);
       }
     }
 
@@ -382,12 +413,21 @@ export async function run(): Promise<void> {
   // Skip row 0 (header). Also skip any subsequent row whose col-0 value is
   // "date" (in case of repeated header pastes in the data area).
   const parsed: ParsedRow[] = [];
+  const dateCorrections: { row: number; from: string; to: string; patient: string | null }[] = [];
   for (let i = 1; i < allRows.length; i++) {
     const r        = allRows[i];
     const col0     = (r[0] ?? '').trim().toLowerCase();
     if (col0 === 'date') continue; // repeated header row in data area
 
-    const date_logged = parseDateLogged(cell(r, 0));
+    let date_logged = parseDateLogged(cell(r, 0));
+    // This tracker is 2026-only, so any other year (e.g. "2027", "0206") is a
+    // data-entry typo — coerce the year to 2026, keeping month/day, and report.
+    // (Mirrors import-case-acceptance-gsheets.ts.)
+    if (date_logged && !date_logged.startsWith(`${SOURCE_YEAR}-`)) {
+      const fixed = `${SOURCE_YEAR}-${date_logged.slice(5)}`;
+      dateCorrections.push({ row: i + 1, from: date_logged, to: fixed, patient: cell(r, 3) });
+      date_logged = fixed;
+    }
     const front_staff = cell(r, 1);
     const clinician   = cell(r, 2);
     const patient     = cell(r, 3);
@@ -416,6 +456,12 @@ export async function run(): Promise<void> {
     });
   }
   console.log(`[gsheets] ${parsed.length} non-empty data rows`);
+  if (dateCorrections.length) {
+    console.log(`\n[gsheets] ⚠ ${dateCorrections.length} typo year(s) coerced to ${SOURCE_YEAR}:`);
+    dateCorrections.forEach(d => console.log(`  row ${d.row}: ${d.from} → ${d.to}  (${d.patient ?? '?'})`));
+  } else {
+    console.log(`[gsheets] all date_logged years are ${SOURCE_YEAR} ✓`);
+  }
 
   // ── Admin user (entered_by) ────────────────────────────────────────────────
   const admin = await userRepository.findByEmail(env.CEO_EMAIL);

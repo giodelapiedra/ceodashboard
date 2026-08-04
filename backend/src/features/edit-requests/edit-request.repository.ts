@@ -1,7 +1,8 @@
+import { PoolClient } from 'pg';
 import { query } from '../../db/pool';
 
-export type EditEntityType = 'case_acceptance' | 'dropout';
-export const EDIT_ENTITY_TYPES: readonly EditEntityType[] = ['case_acceptance', 'dropout'];
+export type EditEntityType = 'case_acceptance' | 'dropout' | 'ad_lead';
+export const EDIT_ENTITY_TYPES: readonly EditEntityType[] = ['case_acceptance', 'dropout', 'ad_lead'];
 
 export type EditRequestStatus = 'pending' | 'approved' | 'rejected';
 
@@ -143,6 +144,16 @@ export const editRequestRepository = {
     return rows[0] ?? null;
   },
 
+  /** Raw row locked FOR UPDATE — must be called inside a transaction. Serializes
+   *  concurrent approve/reject on the same request so only one wins. */
+  async findRawByIdForUpdate(client: PoolClient, id: string): Promise<EditRequestRow | null> {
+    const { rows } = await client.query<EditRequestRow>(
+      `SELECT * FROM edit_requests WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    return rows[0] ?? null;
+  },
+
   async listByStatus(status: EditRequestStatus): Promise<EditRequestDTO[]> {
     const { rows } = await query<EditRequestJoinedRow>(
       `${SELECT_JOINED} WHERE er.status = $1 ORDER BY er.created_at DESC`,
@@ -162,19 +173,24 @@ export const editRequestRepository = {
     return rows;
   },
 
+  /** Close a PENDING request. The `AND status = 'pending'` guard means a
+   *  request that was already approved/rejected by a concurrent admin is never
+   *  silently overwritten — returns false so the caller can 409.
+   *  Optional `client` runs it inside the approval transaction. */
   async setStatus(
     id: string,
     status: Exclude<EditRequestStatus, 'pending'>,
     reviewedBy: string,
-    rejectionReason?: string | null
-  ): Promise<void> {
-    await query(
-      `UPDATE edit_requests
+    rejectionReason?: string | null,
+    client?: PoolClient
+  ): Promise<boolean> {
+    const sql = `UPDATE edit_requests
           SET status = $2, reviewed_by = $3, reviewed_at = NOW(),
               rejection_reason = $4, updated_at = NOW()
-        WHERE id = $1`,
-      [id, status, reviewedBy, rejectionReason ?? null]
-    );
+        WHERE id = $1 AND status = 'pending'`;
+    const params = [id, status, reviewedBy, rejectionReason ?? null];
+    const result = client ? await client.query(sql, params) : await query(sql, params);
+    return (result.rowCount ?? 0) > 0;
   },
 
   /** Recently rejected requests for the requester — drives the "why was my edit rejected?" UI. */

@@ -17,7 +17,9 @@ import draftsRoutes          from './features/drafts/drafts.routes';
 import deleteRequestsRoutes  from './features/delete-requests/delete-requests.routes';
 import editRequestsRoutes    from './features/edit-requests/edit-requests.routes';
 import adSpendRoutes         from './features/ad-spend/ad-spend.routes';
+import adLeadsRoutes         from './features/ad-leads/ad-leads.routes';
 import auditLogRoutes        from './features/audit-log/audit-log.routes';
+import patientsRoutes         from './features/patients/patients.routes';
 import { errorMiddleware } from './middleware/error.middleware';
 
 const app = express();
@@ -40,7 +42,9 @@ app.use('/api/drafts',          draftsRoutes);
 app.use('/api/delete-requests', deleteRequestsRoutes);
 app.use('/api/edit-requests',   editRequestsRoutes);
 app.use('/api/ad-spend',        adSpendRoutes);
+app.use('/api/ad-leads',        adLeadsRoutes);
 app.use('/api/audit-log',       auditLogRoutes);
+app.use('/api/patients',        patientsRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

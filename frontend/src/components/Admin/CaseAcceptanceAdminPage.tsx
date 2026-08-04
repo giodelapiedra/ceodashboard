@@ -266,7 +266,7 @@ export default function CaseAcceptanceAdminPage() {
                     <Th align="right">Acceptance</Th>
                     <Th align="center">Prepay offered</Th>
                     <Th align="center">Prepay accepted</Th>
-                    <Th>Transition notes</Th>
+                    <Th>Treatment Plan notes</Th>
                     <Th>Notes</Th>
                   </tr>
                 </thead>

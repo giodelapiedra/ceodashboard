@@ -10,6 +10,7 @@ export interface CreateUserPayload {
 }
 
 export interface UpdateUserPayload {
+  email?:     string;
   full_name?: string;
   role?:      Role;
   clinic_id?: ClinicId | null;

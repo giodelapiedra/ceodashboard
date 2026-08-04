@@ -1,5 +1,7 @@
+import { PoolClient } from 'pg';
 import { query } from '../../db/pool';
 import { RequestScope } from '../../middleware/auth.middleware';
+import { NAME_NORM_SQL, SIMILAR_WINDOW_DAYS, normalizeName } from '../../shared/duplicates';
 
 export interface CaseAcceptanceRow {
   id:                       string;
@@ -117,6 +119,23 @@ export interface CreateInput {
   prepay_accepted:          boolean | null;
   transition_notes:         string | null;
   notes:                    string | null;
+}
+
+/**
+ * Natural key of a case-acceptance entry — one clinician recording one
+ * patient's case discussion on one day. Two rows sharing all four are the same
+ * conversation keyed twice.
+ */
+export interface CaseAcceptanceDupKey {
+  clinic_id:    string;
+  clinician_id: string;
+  patient_name: string;
+  date_logged:  string;   // YYYY-MM-DD
+}
+
+/** Stable string for the advisory lock that serializes check-then-insert. */
+export function caseAcceptanceLockKey(key: CaseAcceptanceDupKey): string {
+  return `case_acceptance:${key.clinic_id}:${key.clinician_id}:${key.date_logged}:${normalizeName(key.patient_name)}`;
 }
 
 export interface UpdateInput {
@@ -343,33 +362,97 @@ export const caseAcceptanceRepository = {
     return rows[0] ?? null;
   },
 
-  async create(input: CreateInput): Promise<CaseAcceptanceDTO> {
-    const { rows } = await query<{ id: string }>(
-      `INSERT INTO case_acceptances (
+  /**
+   * Unscoped joined read. Used by create() / overwrite() to build the response
+   * from INSIDE their own transaction — a scoped read on a pooled connection
+   * would run on a different session and not see the uncommitted row.
+   */
+  async findJoinedById(id: string, client?: PoolClient): Promise<CaseAcceptanceDTO | null> {
+    const sql = `${SELECT_JOINED} WHERE c.id = $1 LIMIT 1`;
+    const { rows } = client
+      ? await client.query<CaseAcceptanceJoinedRow>(sql, [id])
+      : await query<CaseAcceptanceJoinedRow>(sql, [id]);
+    return rows[0] ? toDTO(rows[0]) : null;
+  },
+
+  /**
+   * Duplicate lookup for one natural key — see the twin in dropout.repository.
+   *
+   *   exact   → same clinic + clinician + normalized patient name + date.
+   *   similar → same clinic + patient within ±SIMILAR_WINDOW_DAYS on a
+   *             different key. Advisory: catches a mistyped date or the same
+   *             patient logged against the wrong clinician.
+   *
+   * Unscoped on purpose — the duplicate a clinician most needs to see is the
+   * one front desk already keyed on their behalf, which their own scoped list
+   * would hide.
+   */
+  async findDuplicates(
+    key:     CaseAcceptanceDupKey,
+    opts:    { excludeId?: string } = {},
+    client?: PoolClient
+  ): Promise<{ exact: CaseAcceptanceDTO | null; similar: CaseAcceptanceDTO[] }> {
+    const params: unknown[] = [
+      key.clinic_id,
+      normalizeName(key.patient_name),
+      key.date_logged,
+      SIMILAR_WINDOW_DAYS,
+      key.clinician_id,
+      opts.excludeId ?? null,
+    ];
+    const sql = `
+      ${SELECT_JOINED}
+      WHERE c.clinic_id = $1
+        AND ${NAME_NORM_SQL('c.patient_name')} = $2
+        AND c.date_logged BETWEEN ($3::date - $4::int) AND ($3::date + $4::int)
+        AND ($6::bigint IS NULL OR c.id <> $6::bigint)
+      ORDER BY (c.clinician_id = $5::bigint AND c.date_logged = $3::date) DESC,
+               c.date_logged DESC, c.id DESC
+      LIMIT 25
+    `;
+    const { rows } = client
+      ? await client.query<CaseAcceptanceJoinedRow>(sql, params)
+      : await query<CaseAcceptanceJoinedRow>(sql, params);
+
+    const all = rows.map(toDTO);
+    const isExact = (r: CaseAcceptanceDTO) =>
+      r.clinician_id === key.clinician_id && r.date_logged === key.date_logged;
+
+    return {
+      exact:   all.find(isExact) ?? null,
+      similar: all.filter((r) => !isExact(r)),
+    };
+  },
+
+  /** Optional `client` runs the insert inside a caller-managed transaction —
+   *  the duplicate guard needs check + insert to be atomic. */
+  async create(input: CreateInput, client?: PoolClient): Promise<CaseAcceptanceDTO> {
+    const sql = `INSERT INTO case_acceptances (
          clinic_id, entered_by, front_staff_name, clinician_id,
          patient_name, date_logged, treatment_plan_provided,
          case_recommendations, appointments_booked,
          prepay_offered, prepay_accepted, transition_notes, notes
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       RETURNING id`,
-      [
-        input.clinic_id, input.entered_by, input.front_staff_name, input.clinician_id,
-        input.patient_name, input.date_logged, input.treatment_plan_provided,
-        input.case_recommendations, input.appointments_booked,
-        input.prepay_offered, input.prepay_accepted, input.transition_notes,
-        input.notes,
-      ]
-    );
+       RETURNING id`;
+    const params = [
+      input.clinic_id, input.entered_by, input.front_staff_name, input.clinician_id,
+      input.patient_name, input.date_logged, input.treatment_plan_provided,
+      input.case_recommendations, input.appointments_booked,
+      input.prepay_offered, input.prepay_accepted, input.transition_notes,
+      input.notes,
+    ];
+    const { rows } = client
+      ? await client.query<{ id: string }>(sql, params)
+      : await query<{ id: string }>(sql, params);
 
-    const joined = await this.findById(
-      { role: 'ADMIN', userId: '0', clinic_id: null, full_name: null },
-      rows[0].id
-    );
+    const joined = await this.findJoinedById(rows[0].id, client);
     if (!joined) throw new Error('Failed to fetch newly inserted case acceptance');
     return joined;
   },
 
-  async update(id: string, patch: UpdateInput, updatedBy: string): Promise<void> {
+  /** Optional `client` runs the statement inside a caller-managed transaction
+   *  (used by the edit-request approval flow so patch + status close atomically). */
+  async update(id: string, patch: UpdateInput, updatedBy: string, client?: PoolClient): Promise<void> {
     const sets: string[] = [];
     const params: unknown[] = [];
 
@@ -393,14 +476,16 @@ export const caseAcceptanceRepository = {
     sets.push(`updated_at = NOW()`);
     params.push(id);
 
-    await query(
-      `UPDATE case_acceptances SET ${sets.join(', ')} WHERE id = $${params.length}`,
-      params
-    );
+    const sql = `UPDATE case_acceptances SET ${sets.join(', ')} WHERE id = $${params.length}`;
+    if (client) await client.query(sql, params);
+    else        await query(sql, params);
   },
 
-  async delete(id: string): Promise<void> {
-    await query(`DELETE FROM case_acceptances WHERE id = $1`, [id]);
+  /** Optional `client` — see update(). */
+  async delete(id: string, client?: PoolClient): Promise<void> {
+    const sql = `DELETE FROM case_acceptances WHERE id = $1`;
+    if (client) await client.query(sql, [id]);
+    else        await query(sql, [id]);
   },
 
   /**

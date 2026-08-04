@@ -1,5 +1,6 @@
 import api from './client';
 import { CaseAcceptanceDTO, ClinicId, FrontStaffName } from '../types';
+import { DuplicateReport, OnDuplicate } from './duplicates';
 
 export interface ListCaseAcceptanceFilters {
   clinic_id?:    ClinicId;
@@ -22,7 +23,19 @@ export interface PagedCaseAcceptance {
   };
 }
 
+/** Natural key of a case-acceptance entry — what the pre-flight matches on. */
+export interface CaseAcceptanceDuplicateQuery {
+  clinic_id?:   ClinicId;
+  clinician_id: string;
+  patient_name: string;
+  date_logged:  string;
+  /** Ignore this row when checking — used by the edit form. */
+  exclude_id?:  string;
+}
+
 export interface CreateCaseAcceptancePayload {
+  /** Omit (= 'reject') to get a 409 carrying the existing row. */
+  on_duplicate?:            OnDuplicate;
   clinic_id?:               ClinicId;
   front_staff_name?:        FrontStaffName | null;
   clinician_id:             string;
@@ -70,6 +83,10 @@ export const caseAcceptanceApi = {
 
   summary: (filters: Omit<ListCaseAcceptanceFilters, 'limit' | 'offset'> = {}): Promise<CaseAcceptanceSummary> =>
     api.get('/api/case-acceptance/summary', { params: filters }).then(r => r.data),
+
+  /** Pre-flight duplicate lookup. Advisory — create() re-checks under a lock. */
+  checkDuplicate: (q: CaseAcceptanceDuplicateQuery): Promise<DuplicateReport<CaseAcceptanceDTO>> =>
+    api.post('/api/case-acceptance/check-duplicate', q).then(r => r.data),
 
   create: (payload: CreateCaseAcceptancePayload): Promise<CaseAcceptanceDTO> =>
     api.post('/api/case-acceptance', payload).then(r => r.data),

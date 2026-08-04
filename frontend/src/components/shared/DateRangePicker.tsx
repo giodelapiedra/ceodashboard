@@ -25,6 +25,8 @@ interface Props {
   onChange: (next: DateRangeValue) => void
   /** Optional cap. If set, ranges longer than this many days will be rejected. */
   maxRangeDays?: number
+  /** Adds an "All time" quick range that clears both dates ({from:'', to:''}). */
+  allowAllTime?: boolean
 }
 
 interface Preset {
@@ -50,7 +52,7 @@ const PRESETS: Preset[] = [
   { label: 'Last 12 months', build: () => ({ from: isoStartOfDay(subDays(new Date(), 364)), to: isoStartOfDay(new Date()) }) },
 ]
 
-export default function DateRangePicker({ value, onChange, maxRangeDays }: Props) {
+export default function DateRangePicker({ value, onChange, maxRangeDays, allowAllTime }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const popRef  = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -144,15 +146,25 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
     }
   }, [open])
 
+  const presets = useMemo<Preset[]>(() => allowAllTime
+    ? [{ label: 'All time', build: () => ({ from: '', to: '' }) }, ...PRESETS]
+    : PRESETS, [allowAllTime])
+
   const activePresetLabel = useMemo(() => {
-    for (const p of PRESETS) {
+    for (const p of presets) {
       const built = p.build()
       if (built.from === value.from && built.to === value.to) return p.label
     }
     return null
-  }, [value])
+  }, [value, presets])
 
   const apply = (next: DateRangeValue) => {
+    // "All time" clears both dates — nothing to cap.
+    if (!next.from && !next.to) {
+      onChange(next)
+      setOpen(false)
+      return
+    }
     // Presets go through here too — enforce the cap for them as well.
     if (maxRangeDays != null) {
       const spanDays = Math.round((startOfDay(parseISO(next.to)).getTime() - startOfDay(parseISO(next.from)).getTime()) / 86400000) + 1
@@ -204,7 +216,7 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
         <CalendarIcon />
         <span style={{ flex: 1, textAlign: 'left' }}>
           {activePresetLabel
-            ? <><span style={{ color: TEAL, fontWeight: 600 }}>{activePresetLabel}</span> <span style={{ color: TEXT_MUTED }}>· {triggerLabel}</span></>
+            ? <><span style={{ color: TEAL, fontWeight: 600 }}>{activePresetLabel}</span>{(value.from || value.to) && <span style={{ color: TEXT_MUTED }}> · {triggerLabel}</span>}</>
             : triggerLabel}
         </span>
         <span style={{
@@ -257,7 +269,7 @@ export default function DateRangePicker({ value, onChange, maxRangeDays }: Props
               padding: '6px 10px 8px',
               ...(narrow ? { width: '100%' } : {}),
             }}>Quick ranges</div>
-            {PRESETS.map((p) => {
+            {presets.map((p) => {
               const built = p.build()
               const active = activePresetLabel === p.label
               return (

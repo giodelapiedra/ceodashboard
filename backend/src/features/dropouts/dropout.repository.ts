@@ -1,6 +1,8 @@
+import { PoolClient } from 'pg';
 import { query } from '../../db/pool';
 import { RequestScope } from '../../middleware/auth.middleware';
 import { DropoutStatus, DropoutReason } from '../../shared/roles';
+import { NAME_NORM_SQL, SIMILAR_WINDOW_DAYS, normalizeName } from '../../shared/duplicates';
 
 export interface DropoutRow {
   id:                          string;
@@ -109,6 +111,22 @@ export interface CreateDropoutInput {
   status:                      DropoutStatus | null;
   reason:                      DropoutReason | null;
   notes:                       string | null;
+}
+
+/**
+ * Natural key of a dropout entry. Two rows sharing all four fields are the
+ * same real-world event keyed twice — see findDuplicates().
+ */
+export interface DropoutDupKey {
+  clinic_id:    string;
+  clinician_id: string;
+  patient_name: string;
+  date_logged:  string;   // YYYY-MM-DD
+}
+
+/** Stable string for the advisory lock that serializes check-then-insert. */
+export function dropoutLockKey(key: DropoutDupKey): string {
+  return `dropout:${key.clinic_id}:${key.clinician_id}:${key.date_logged}:${normalizeName(key.patient_name)}`;
 }
 
 export interface UpdateDropoutInput {
@@ -340,32 +358,98 @@ export const dropoutRepository = {
     return rows[0] ?? null;
   },
 
-  async create(input: CreateDropoutInput): Promise<DropoutDTO> {
-    const { rows } = await query<{ id: string }>(
-      `INSERT INTO patient_dropouts (
+  /**
+   * Unscoped joined read. Used by create() / overwrite() to build the response
+   * from INSIDE their own transaction — a scoped read on a pooled connection
+   * would run on a different session and not see the uncommitted row.
+   */
+  async findJoinedById(id: string, client?: PoolClient): Promise<DropoutDTO | null> {
+    const sql = `${SELECT_JOINED} WHERE d.id = $1 LIMIT 1`;
+    const { rows } = client
+      ? await client.query<DropoutJoinedRow>(sql, [id])
+      : await query<DropoutJoinedRow>(sql, [id]);
+    return rows[0] ? toDTO(rows[0]) : null;
+  },
+
+  /**
+   * Duplicate lookup for one natural key, in a single index-backed pass.
+   *
+   *   exact   → same clinic + clinician + normalized patient name + date.
+   *             A real duplicate: the same event keyed twice.
+   *   similar → same clinic + patient within ±SIMILAR_WINDOW_DAYS but a
+   *             different key (other clinician, or a nearby date). Advisory
+   *             only — shown so the encoder can spot a mistyped date.
+   *
+   * Deliberately UNSCOPED: the whole point is to surface a row the caller
+   * cannot see in their own list (a clinician does not see the entry front
+   * desk keyed for them), which is precisely how duplicates get in today.
+   *
+   * ORDER BY puts the exact match first, so the LIMIT can never drop it.
+   */
+  async findDuplicates(
+    key:     DropoutDupKey,
+    opts:    { excludeId?: string } = {},
+    client?: PoolClient
+  ): Promise<{ exact: DropoutDTO | null; similar: DropoutDTO[] }> {
+    const params: unknown[] = [
+      key.clinic_id,
+      normalizeName(key.patient_name),
+      key.date_logged,
+      SIMILAR_WINDOW_DAYS,
+      key.clinician_id,
+      opts.excludeId ?? null,
+    ];
+    const sql = `
+      ${SELECT_JOINED}
+      WHERE d.clinic_id = $1
+        AND ${NAME_NORM_SQL('d.patient_name')} = $2
+        AND d.date_logged BETWEEN ($3::date - $4::int) AND ($3::date + $4::int)
+        AND ($6::bigint IS NULL OR d.id <> $6::bigint)
+      ORDER BY (d.clinician_id = $5::bigint AND d.date_logged = $3::date) DESC,
+               d.date_logged DESC, d.id DESC
+      LIMIT 25
+    `;
+    const { rows } = client
+      ? await client.query<DropoutJoinedRow>(sql, params)
+      : await query<DropoutJoinedRow>(sql, params);
+
+    const all = rows.map(toDTO);
+    const isExact = (r: DropoutDTO) =>
+      r.clinician_id === key.clinician_id && r.date_logged === key.date_logged;
+
+    return {
+      exact:   all.find(isExact) ?? null,
+      similar: all.filter((r) => !isExact(r)),
+    };
+  },
+
+  /** Optional `client` runs the insert inside a caller-managed transaction —
+   *  the duplicate guard needs check + insert to be atomic. */
+  async create(input: CreateDropoutInput, client?: PoolClient): Promise<DropoutDTO> {
+    const sql = `INSERT INTO patient_dropouts (
          clinic_id, entered_by, front_staff_name, clinician_id,
          patient_name, date_logged, appointment_cancelled_dates,
          status, reason, notes
        ) VALUES ($1,$2,$3,$4,$5,$6,$7::date[],$8,$9,$10)
-       RETURNING id`,
-      [
-        input.clinic_id, input.entered_by, input.front_staff_name, input.clinician_id,
-        input.patient_name, input.date_logged, input.appointment_cancelled_dates,
-        input.status, input.reason, input.notes,
-      ]
-    );
+       RETURNING id`;
+    const params = [
+      input.clinic_id, input.entered_by, input.front_staff_name, input.clinician_id,
+      input.patient_name, input.date_logged, input.appointment_cancelled_dates,
+      input.status, input.reason, input.notes,
+    ];
+    const { rows } = client
+      ? await client.query<{ id: string }>(sql, params)
+      : await query<{ id: string }>(sql, params);
 
-    const created = await this.findRawById(rows[0].id);
-    if (!created) throw new Error('Failed to fetch newly inserted dropout');
     // Re-query with joined names so the response shape is consistent.
-    const joined = await this.findById(
-      { role: 'ADMIN', userId: '0', clinic_id: null, full_name: null },
-      created.id
-    );
-    return joined!;
+    const joined = await this.findJoinedById(rows[0].id, client);
+    if (!joined) throw new Error('Failed to fetch newly inserted dropout');
+    return joined;
   },
 
-  async update(id: string, patch: UpdateDropoutInput, updatedBy: string): Promise<void> {
+  /** Optional `client` runs the statement inside a caller-managed transaction
+   *  (used by the edit-request approval flow so patch + status close atomically). */
+  async update(id: string, patch: UpdateDropoutInput, updatedBy: string, client?: PoolClient): Promise<void> {
     const sets: string[] = [];
     const params: unknown[] = [];
 
@@ -391,14 +475,16 @@ export const dropoutRepository = {
     sets.push(`updated_at = NOW()`);
     params.push(id);
 
-    await query(
-      `UPDATE patient_dropouts SET ${sets.join(', ')} WHERE id = $${params.length}`,
-      params
-    );
+    const sql = `UPDATE patient_dropouts SET ${sets.join(', ')} WHERE id = $${params.length}`;
+    if (client) await client.query(sql, params);
+    else        await query(sql, params);
   },
 
-  async delete(id: string): Promise<void> {
-    await query(`DELETE FROM patient_dropouts WHERE id = $1`, [id]);
+  /** Optional `client` — see update(). */
+  async delete(id: string, client?: PoolClient): Promise<void> {
+    const sql = `DELETE FROM patient_dropouts WHERE id = $1`;
+    if (client) await client.query(sql, [id]);
+    else        await query(sql, [id]);
   },
 
   /**

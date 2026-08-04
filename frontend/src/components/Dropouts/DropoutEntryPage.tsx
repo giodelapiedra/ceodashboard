@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { dropoutsApi, CreateDropoutPayload, UpdateDropoutPayload, DropoutSummary } from '../../api/dropouts.api'
+import { DuplicateReport, OnDuplicate, duplicateReportFromError } from '../../api/duplicates'
 import { draftsApi, DraftDTO } from '../../api/drafts.api'
 import { deleteRequestsApi } from '../../api/deleteRequests.api'
 import { editRequestsApi } from '../../api/editRequests.api'
@@ -16,8 +17,10 @@ import { useDraftResumeStore } from '../../store/draftResume.store'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import { promptDialog } from '../../store/prompt.store'
+import { duplicateDialog, DuplicateField } from '../../store/duplicate.store'
 import { exportDropoutsXlsx } from '../../lib/exportDropoutsXlsx'
 import AppShell from '../shared/AppShell'
+import PatientNameInput from '../shared/PatientNameInput'
 import Pagination from '../shared/Pagination'
 import DateRangePicker from '../shared/DateRangePicker'
 import DraftsPanel from '../shared/DraftsPanel'
@@ -43,6 +46,56 @@ function daysAgoISO(days: number): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
+/** Placeholder for blank values in the duplicate diff table. */
+const DASH = '—'
+
+/**
+ * The values that will actually be stored. The natural-key fields (patient,
+ * date, clinician, clinic) are identical by definition when we hit a duplicate,
+ * so they live in the dialog subtitle — only what can differ gets a diff row.
+ */
+interface DropoutValues {
+  front_staff_name: string | null
+  cancel_dates:     string[]
+  status:           string
+  reason:           string
+  notes:            string | null
+}
+
+function dropoutDiffFields(existing: DropoutDTO, incoming: DropoutValues): DuplicateField[] {
+  return [
+    { label: 'Status', existing: existing.status ?? DASH, incoming: incoming.status },
+    { label: 'Reason', existing: existing.reason ?? DASH, incoming: incoming.reason },
+    {
+      label:    'Cancelled dates',
+      existing: existing.appointment_cancelled_dates.join(', ') || DASH,
+      incoming: incoming.cancel_dates.join(', ') || DASH,
+    },
+    {
+      label:    'Front staff',
+      existing: existing.front_staff_name || DASH,
+      incoming: incoming.front_staff_name || DASH,
+    },
+    { label: 'Notes', existing: existing.notes || DASH, incoming: incoming.notes || DASH },
+  ]
+}
+
+/** Only the fields that actually changed — an edit request should ask the
+ *  admin to approve the difference, not re-state the whole row. */
+function dropoutPatchFrom(existing: DropoutDTO, incoming: DropoutValues): Record<string, unknown> {
+  const patch: Record<string, unknown> = {}
+  if ((incoming.front_staff_name || null) !== (existing.front_staff_name || null))
+    patch.front_staff_name = incoming.front_staff_name || null
+  // Order-insensitive: [a,b] and [b,a] are the same set of cancellations.
+  if ([...incoming.cancel_dates].sort().join(',') !==
+      [...existing.appointment_cancelled_dates].sort().join(','))
+    patch.appointment_cancelled_dates = incoming.cancel_dates
+  if (incoming.status !== existing.status) patch.status = incoming.status
+  if (incoming.reason !== existing.reason) patch.reason = incoming.reason
+  if ((incoming.notes || null) !== (existing.notes || null)) patch.notes = incoming.notes || null
+  return patch
+}
+
 interface FormState {
   date_logged:                 string
   clinic_id:                   ClinicId | ''  // chosen by FRONT_DESK_GLOBAL per entry
@@ -58,12 +111,18 @@ interface FormState {
   notes:                       string
 }
 
+// Clinician dropdowns show first name only (e.g. "Emma Sloot" → "Emma").
+// The stored user record is never changed — this is display-only.
+function clinicianFirstName(c: User): string {
+  return c.full_name?.trim().split(/\s+/)[0] || c.email
+}
+
 function emptyForm(currentUser: User): FormState {
-  // FRONT_DESK_GLOBAL and CLINICIAN both pick clinic per entry (clinicians
-  // rotate between sites, so we don't pre-fill from their primary clinic).
-  // FRONT_DESK is pinned to their own clinic by the server.
+  // FRONT_DESK_GLOBAL, CLINICIAN and ADMIN all pick clinic per entry
+  // (clinicians rotate between sites and the super admin has no pinned clinic,
+  // so we don't pre-fill). FRONT_DESK is pinned to their own clinic by the server.
   const picksClinic =
-    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN'
+    currentUser.role === 'FRONT_DESK_GLOBAL' || currentUser.role === 'CLINICIAN' || currentUser.role === 'ADMIN'
   return {
     date_logged:                 todayISO(),
     clinic_id:                   picksClinic
@@ -114,6 +173,9 @@ export default function DropoutEntryPage() {
   const [clinicians, setClinicians] = useState<User[]>([])
 
   const isAdmin = user.role === 'ADMIN'
+  // Clinicians AND admins get the Encode / Entries tab split; front-desk roles
+  // keep the stacked (form + list) layout.
+  const useTabs = isClinician || isAdmin || isReceptionist
   const [activeTab, setActiveTab] = useState<'encode' | 'entries'>('encode')
 
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -164,8 +226,7 @@ export default function DropoutEntryPage() {
   }
   const visibleRejections = rejectedEdits.filter(r => !dismissedIds.has(r.id))
 
-  // Saved drafts (this user's own, server-side so they survive logout). ADMIN
-  // can't create entries, so drafts don't apply to them.
+  // Saved drafts (this user's own, server-side so they survive logout).
   const [drafts, setDrafts] = useState<DraftDTO<FormState>[]>([])
   // The draft currently loaded into the form (null = composing a fresh entry).
   const [draftId, setDraftId] = useState<string | null>(null)
@@ -173,10 +234,9 @@ export default function DropoutEntryPage() {
   const [showDraftBlocker, setShowDraftBlocker] = useState(false)
 
   const reloadDrafts = useCallback(async () => {
-    if (isAdmin) return
     try { setDrafts(await draftsApi.list<FormState>('dropout')) }
     catch { /* drafts are a convenience — never block the page on them */ }
-  }, [isAdmin])
+  }, [])
   useEffect(() => { reloadDrafts() }, [reloadDrafts])
 
   // Entry ids this user already has a pending delete request for — used to
@@ -255,7 +315,7 @@ export default function DropoutEntryPage() {
       reason:                      row.reason ?? '',
       notes:                       row.notes ?? '',
     })
-    if (isClinician) setActiveTab('encode')
+    if (useTabs) setActiveTab('encode')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -286,9 +346,9 @@ export default function DropoutEntryPage() {
     setEditingId(null)
     setDraftId(null)
     setForm(emptyForm(user))
-    // After finishing/cancelling an edit, send clinician back to entries tab
-    // so they can see their list and the Edit/Request Delete buttons again.
-    if (isClinician) setActiveTab('entries')
+    // After finishing/cancelling an edit, send them back to the entries tab
+    // so they can see the list and the Edit/Delete buttons again.
+    if (useTabs) setActiveTab('entries')
   }
 
   // Save the current form as a draft (create the first time, overwrite after).
@@ -329,7 +389,7 @@ export default function DropoutEntryPage() {
     setEditingId(null)
     setForm({ ...emptyForm(user), ...d.form_data })
     setDraftId(d.id)
-    if (isClinician) setActiveTab('encode')
+    if (useTabs) setActiveTab('encode')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -355,6 +415,73 @@ export default function DropoutEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending])
 
+  /**
+   * Show the duplicate dialog for an exact match and turn the answer into the
+   * next action:
+   *   'allow'     → POST it as a genuinely separate entry
+   *   'overwrite' → POST with on_duplicate=overwrite (caller may write directly)
+   *   'handled'   → an edit request was filed instead; nothing left to do
+   *   null        → user backed out, save nothing
+   */
+  const resolveDuplicate = async (
+    report:   DuplicateReport<DropoutDTO>,
+    incoming: DropoutValues
+  ): Promise<'allow' | 'overwrite' | 'handled' | null> => {
+    const existing = report.exact!
+    const owner    = existing.entered_by_name || 'another user'
+
+    const choice = await duplicateDialog.ask({
+      title:    'This dropout entry is already logged',
+      subtitle: [
+        existing.patient_name,
+        existing.date_logged,
+        CLINIC_LABEL[existing.clinic_id as ClinicId] ?? existing.clinic_id,
+        existing.clinician_name,
+      ].filter(Boolean).join('  ·  '),
+      existingMeta:  `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
+      fields:        dropoutDiffFields(existing, incoming),
+      primaryLabel:  report.can_overwrite ? 'Overwrite existing entry' : 'Send update for approval',
+      primaryNote:   report.can_overwrite
+        ? 'Overwriting replaces the saved values. The old ones stay in the audit log.'
+        : `${owner} logged that entry, so an admin has to approve the change.`,
+      separateLabel: 'Not a duplicate — save separately',
+    })
+
+    if (choice === 'cancel')   return null
+    if (choice === 'separate') return 'allow'
+    if (report.can_overwrite)  return 'overwrite'
+
+    // No direct write for this user → file an edit request against the row
+    // that already exists, rather than adding a second one.
+    const patch = dropoutPatchFrom(existing, incoming)
+    if (Object.keys(patch).length === 0) {
+      toast.error('Nothing to change — your entry matches the saved one exactly')
+      return null
+    }
+
+    const reason = await promptDialog.ask({
+      title:        'Why should this entry be changed?',
+      message:      `Patient: ${existing.patient_name}\n\nThe admin reviews this together with your changes.`,
+      placeholder:  'e.g. Status was wrong — the patient rebooked',
+      confirmLabel: 'Submit for approval',
+    })
+    if (reason === null) return null
+
+    try {
+      await editRequestsApi.create({
+        entity_type: 'dropout',
+        entity_id:   existing.id,
+        reason:      reason.trim() || 'Duplicate entry — corrected values',
+        patch,
+      })
+      toast.success('Edit request submitted — waiting for admin approval')
+      return 'handled'
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || 'Failed to submit edit request')
+      return null
+    }
+  }
+
   const onSubmit = async () => {
     setError('')
 
@@ -378,22 +505,58 @@ export default function DropoutEntryPage() {
         ? [...form.appointment_cancelled_dates, form.cancel_date_input].sort()
         : form.appointment_cancelled_dates
 
-    // New entry with a patient name that already exists → warn, don't block.
-    // The same client can legitimately drop out more than once.
+    if (cancelDates.length === 0)
+      return setError('At least one appointment-cancelled date is required')
+
+    // The values that will actually be stored — the duplicate diff and any
+    // edit-request patch are both computed from these.
+    const incoming: DropoutValues = {
+      // Receptionists get front_staff_name stamped server-side from their
+      // login; show what will really be saved, not the (ignored) form value.
+      front_staff_name: isReceptionist ? (user.full_name || null) : (form.front_staff_name || null),
+      cancel_dates:     cancelDates,
+      status:           form.status,
+      reason:           form.reason,
+      notes:            form.notes.trim() || null,
+    }
+
+    // New entry → look for an existing one with the same natural key. This is
+    // only a pre-flight for the UI: the POST re-checks under a lock, so a
+    // failed check here must never block the save.
+    let onDuplicate: OnDuplicate | undefined
     if (!editingId) {
-      const name = form.patient_name.trim()
-      let dupes: DropoutDTO[] = []
+      let report: DuplicateReport<DropoutDTO> | null = null
       try {
-        const res = await dropoutsApi.list({ search: name, limit: 50 })
-        dupes = res.data.filter(d => d.patient_name.trim().toLowerCase() === name.toLowerCase())
-      } catch { /* best-effort — never block saving because the check failed */ }
-      if (dupes.length > 0) {
-        const latest = dupes.map(d => d.date_logged).sort().slice(-1)[0]
+        report = await dropoutsApi.checkDuplicate({
+          ...(picksClinic ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          clinician_id: form.clinician_id,
+          patient_name: form.patient_name.trim(),
+          date_logged:  form.date_logged,
+        })
+      } catch { /* best-effort — the POST re-checks under a lock */ }
+
+      if (report?.exact) {
+        const decision = await resolveDuplicate(report, incoming)
+        if (decision === null) return
+        if (decision === 'handled') {
+          cancelEdit(); await load(); await reloadPendingEdits(); return
+        }
+        onDuplicate = decision
+      } else if (report && report.similar.length > 0) {
+        // Tier 2: same patient at this clinic within two weeks, but a
+        // different clinician or date. Legitimate often enough that it only
+        // warrants a heads-up — the usual cause is a mistyped date.
+        const near  = report.similar[0]
+        const extra = report.similar.length - 1
         const ok = await confirmDialog.ask({
-          title:        'Same patient name already logged',
-          message:      `"${name}" already has ${dupes.length === 1 ? 'a dropout entry' : `${dupes.length} dropout entries`} (latest: ${latest}).\n\nIf this is the same client dropping out again, adding another entry is fine. Add this entry?`,
+          title:   'Same patient logged nearby',
+          message:
+            `"${near.patient_name}" already has a dropout entry on ${near.date_logged}` +
+            `${near.clinician_name ? ` under ${near.clinician_name}` : ''}` +
+            `${extra > 0 ? ` (and ${extra} more within two weeks)` : ''}.` +
+            `\n\nDouble-check the date and clinician. Add this entry?`,
           confirmLabel: 'Yes, add entry',
-          cancelLabel:  'Cancel',
+          cancelLabel:  'Let me check',
         })
         if (!ok) return
       }
@@ -487,9 +650,9 @@ export default function DropoutEntryPage() {
         const payload: CreateDropoutPayload = {
           date_logged:                 form.date_logged,
           clinician_id:                form.clinician_id,
-          // CLINICIAN + FRONT_DESK_GLOBAL pick clinic per entry; FRONT_DESK
-          // is pinned server-side from scope.
-          ...((isClinician || isFrontDeskGlobal) ? { clinic_id: form.clinic_id as ClinicId } : {}),
+          // CLINICIAN + FRONT_DESK_GLOBAL + ADMIN pick clinic per entry;
+          // FRONT_DESK is pinned server-side from scope.
+          ...(picksClinic ? { clinic_id: form.clinic_id as ClinicId } : {}),
           ...(frontStaff !== undefined ? { front_staff_name: frontStaff } : {}),
           patient_name:                patientName,
           appointment_cancelled_dates: cancelDates,
@@ -497,8 +660,28 @@ export default function DropoutEntryPage() {
           reason:                      form.reason as DropoutReason,
           notes:                       form.notes.trim() || null,
         }
-        await dropoutsApi.create(payload)
-        toast.success(`Added dropout entry for ${patientName}`)
+
+        let overwrote = onDuplicate === 'overwrite'
+        try {
+          await dropoutsApi.create({ ...payload, ...(onDuplicate ? { on_duplicate: onDuplicate } : {}) })
+        } catch (e: any) {
+          // Someone keyed the same entry between the pre-flight check and this
+          // POST — the server won that race. Show the same dialog and retry.
+          const raced = duplicateReportFromError<DropoutDTO>(e)
+          if (!raced) throw e
+
+          const decision = await resolveDuplicate(raced, incoming)
+          if (decision === null) return
+          if (decision === 'handled') {
+            cancelEdit(); await load(); await reloadPendingEdits(); return
+          }
+          overwrote = decision === 'overwrite'
+          await dropoutsApi.create({ ...payload, on_duplicate: decision })
+        }
+
+        toast.success(overwrote
+          ? `Overwrote the existing dropout entry for ${patientName}`
+          : `Added dropout entry for ${patientName}`)
       }
       // If this entry was promoted from a saved draft, discard the draft now.
       if (!editingId && draftId) {
@@ -585,18 +768,18 @@ export default function DropoutEntryPage() {
     return row.entered_by === user.id
   }
 
-  // ADMINs are blocked from creating entries (backend enforces). Show the
-  // form only when editing an existing row — never for fresh creation.
-  const showCreateForm = user.role !== 'ADMIN' || editingId !== null
+  // Every entry role (including ADMIN) can create; the form doubles as the
+  // editor when a row is loaded, so it's always shown.
+  const showCreateForm = true
 
   return (
-    <AppShell title="Daily Patient Dropout Tracking">
+    <AppShell title="Daily Patient Dropout Tracking" hideNav>
       <div className="pw-page" style={{ padding: '20px 28px' }}>
-        {isClinician && (
-          <SubTabs active={activeTab} total={total} onChange={setActiveTab} />
+        {useTabs && (
+          <SubTabs active={activeTab} total={total} entriesLabel={isAdmin ? 'All Entries' : 'My Entries'} onChange={setActiveTab} />
         )}
-        {/* Form card — hidden for ADMINs unless they're editing an existing row */}
-        {(!isClinician || activeTab === 'encode') && showCreateForm && (
+        {/* Form card — create a new entry, or edit the row currently loaded */}
+        {(!useTabs || activeTab === 'encode') && showCreateForm && (
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           padding: 18, marginBottom: 20,
@@ -663,7 +846,7 @@ export default function DropoutEntryPage() {
                   style={inputStyle}>
                   <option value="">— Select clinician —</option>
                   {clinicians.map(c => (
-                    <option key={c.id} value={c.id}>{c.full_name || c.email}</option>
+                    <option key={c.id} value={c.id}>{clinicianFirstName(c)}</option>
                   ))}
                 </select>
               </Field>
@@ -698,13 +881,14 @@ export default function DropoutEntryPage() {
             )}
 
             <Field label="Patient name">
-              <input value={form.patient_name}
-                onChange={e => setForm({ ...form, patient_name: e.target.value })}
+              <PatientNameInput
+                value={form.patient_name}
+                onChange={v => setForm({ ...form, patient_name: v })}
                 placeholder="e.g. Jay Rowley"
                 style={inputStyle} />
             </Field>
 
-            <Field label="Appointment cancelled dates (optional)" full>
+            <Field label="Appointment cancelled dates" full>
               <CancelledDatesPicker
                 dates={form.appointment_cancelled_dates}
                 input={form.cancel_date_input}
@@ -770,7 +954,7 @@ export default function DropoutEntryPage() {
         )}
 
         {/* Rejected edit notifications */}
-        {(!isClinician || activeTab === 'entries') && visibleRejections.map(r => (
+        {(!useTabs || activeTab === 'entries') &&visibleRejections.map(r => (
           <div key={r.id} style={{
             background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 10,
             padding: '12px 16px', marginBottom: 12,
@@ -801,7 +985,7 @@ export default function DropoutEntryPage() {
         ))}
 
         {/* Saved drafts — this user's own, resume anytime (even after re-login) */}
-        {(!isClinician || activeTab === 'encode') && !isAdmin && (
+        {(!useTabs || activeTab === 'encode') && (
           <DraftsPanel
             drafts={drafts}
             onResume={resumeDraft}
@@ -811,7 +995,7 @@ export default function DropoutEntryPage() {
         )}
 
         {/* Filters */}
-        {(!isClinician || activeTab === 'entries') && (
+        {(!useTabs || activeTab === 'entries') &&(
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Search</span>
@@ -845,7 +1029,7 @@ export default function DropoutEntryPage() {
               <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Clinician</span>
               <select value={clinicianFilter} onChange={e => setClinicianFilter(e.target.value)} style={inputStyle}>
                 <option value="">All Clinicians</option>
-                {clinicians.map(c => <option key={c.id} value={c.id}>{c.full_name || c.email}</option>)}
+                {clinicians.map(c => <option key={c.id} value={c.id}>{clinicianFirstName(c)}</option>)}
               </select>
             </div>
           )}
@@ -867,7 +1051,7 @@ export default function DropoutEntryPage() {
         )}
 
         {/* Summary cards */}
-        {(!isClinician || activeTab === 'entries') && (
+        {(!useTabs || activeTab === 'entries') &&(
         <div className="pw-grid-2" style={{
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
           marginBottom: 16,
@@ -880,7 +1064,7 @@ export default function DropoutEntryPage() {
         )}
 
         {/* Table */}
-        {(!isClinician || activeTab === 'entries') && (
+        {(!useTabs || activeTab === 'entries') &&(
         <div style={{
           background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 10,
           overflow: 'hidden',
@@ -1059,15 +1243,15 @@ function StatusChip({ label, color, title }: { label: string; color: 'blue' | 'a
 }
 
 function SubTabs({
-  active, total, onChange,
-}: { active: 'encode' | 'entries'; total: number; onChange: (t: 'encode' | 'entries') => void }) {
+  active, total, onChange, entriesLabel = 'My Entries',
+}: { active: 'encode' | 'entries'; total: number; onChange: (t: 'encode' | 'entries') => void; entriesLabel?: string }) {
   return (
     <div style={{
       display: 'flex', gap: 0, marginBottom: 16,
       borderBottom: '2px solid #e5e7eb',
     }}>
       {(['encode', 'entries'] as const).map(t => {
-        const label = t === 'encode' ? 'Encode' : `My Entries (${total.toLocaleString()})`
+        const label = t === 'encode' ? 'Encode' : `${entriesLabel} (${total.toLocaleString()})`
         const isActive = active === t
         return (
           <button

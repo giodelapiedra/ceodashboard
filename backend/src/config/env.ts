@@ -47,6 +47,12 @@ const EnvSchema = z.object({
   GOOGLE_SHEETS_CLIENT_SECRET:   z.string().min(1).optional(),
   GOOGLE_SHEETS_KEY_FILE:        z.string().min(1).optional(),
 
+  // ── Teams notifications (optional — notifier refuses to send when absent) ─
+  // Power Automate "When an HTTP request is received" trigger URL for the
+  // Teams group. The URL embeds its own `sig=` signature, so treat it as a
+  // SECRET: .env only (chmod 600), never in the repo or a log line.
+  TEAMS_WEBHOOK_URL: z.string().url().optional(),
+
   CEO_EMAIL:    z.string().email(),
   CEO_PASSWORD: z.string().min(8),
 

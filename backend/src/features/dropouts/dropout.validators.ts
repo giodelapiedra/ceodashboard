@@ -4,8 +4,21 @@ import {
   DropoutStatus, DropoutReason, ClinicId,
 } from '../../shared/roles';
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
-const idStr   = z.string().regex(/^\d+$/, 'Must be a numeric id').or(z.string().min(1));
+// Regex catches the shape; the refine rejects impossible calendar dates
+// (e.g. 2026-02-30) and obvious year typos (e.g. 0226) that would otherwise
+// either 500 at the DB or silently vanish from every date-filtered view.
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
+  .refine((s) => {
+    const [y, m, d] = s.split('-').map(Number);
+    if (y < 2000 || y > 2100) return false;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+  }, 'Date must be a real calendar date between 2000 and 2100');
+// ids are BIGSERIAL — must be numeric strings, otherwise Postgres throws a
+// type error (500) instead of a clean 400.
+const idStr   = z.string().regex(/^\d+$/, 'Must be a numeric id');
 
 const statusEnum = z.enum([...DROPOUT_STATUSES] as [DropoutStatus, ...DropoutStatus[]]);
 const reasonEnum = z.enum([...DROPOUT_REASONS]  as [DropoutReason, ...DropoutReason[]]);
@@ -16,7 +29,14 @@ const clinicEnum = z.enum([...CLINIC_IDS]       as [ClinicId,      ...ClinicId[]
 // stamped server-side from their login regardless of what they send.
 const frontStaffField = z.string().min(1).max(120).trim().nullable();
 
+// What to do when an entry with the same natural key already exists. Absent
+// (= 'reject') is the safe default: an old client, or a direct API call, gets
+// the 409 rather than silently creating the duplicate this feature exists to
+// prevent.
+const onDuplicateEnum = z.enum(['reject', 'overwrite', 'allow']);
+
 export const createDropoutSchema = z.object({
+  on_duplicate:               onDuplicateEnum.optional(),
   // FRONT_DESK_GLOBAL must set clinic_id; for other non-admin roles it's
   // derived from scope. ADMIN cannot create.
   clinic_id:                  clinicEnum.optional(),
@@ -56,5 +76,16 @@ export const listDropoutsQuerySchema = z.object({
   offset:       z.coerce.number().int().min(0).optional(),
 });
 
-export type CreateDropoutBody = z.infer<typeof createDropoutSchema>;
-export type UpdateDropoutBody = z.infer<typeof updateDropoutSchema>;
+// Pre-flight duplicate check — just the natural key. exclude_id lets the edit
+// form ask "would this collide with anything other than the row I'm editing?".
+export const checkDropoutDuplicateSchema = z.object({
+  clinic_id:    clinicEnum.optional(),
+  clinician_id: idStr,
+  patient_name: z.string().min(1).max(200).trim(),
+  date_logged:  isoDate,
+  exclude_id:   idStr.optional(),
+});
+
+export type CreateDropoutBody         = z.infer<typeof createDropoutSchema>;
+export type UpdateDropoutBody         = z.infer<typeof updateDropoutSchema>;
+export type CheckDropoutDuplicateBody = z.infer<typeof checkDropoutDuplicateSchema>;

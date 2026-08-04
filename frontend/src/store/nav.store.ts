@@ -7,16 +7,19 @@ export type AppPage =
   | 'admin-dropouts'
   | 'admin-dropout-analytics'
   | 'admin-case-acceptance'
+  | 'admin-ad-leads'
   | 'admin-delete-requests'
   | 'admin-edit-requests'
   | 'admin-activity-log'
   | 'admin-clinician-profile'
   | 'dropout-entry'
   | 'case-acceptance-entry'
+  | 'ad-leads-entry'
   | 'drafts'
   | 'ad-spend-entry'
   | 'clinician-home'
   | 'frontdesk-home'
+  | 'admin-home'
 
 export const PAGE_PATH: Record<AppPage, string> = {
   'dashboard':                 '/',
@@ -25,16 +28,19 @@ export const PAGE_PATH: Record<AppPage, string> = {
   'admin-dropouts':            '/admin/dropouts',
   'admin-dropout-analytics':   '/admin/dropout-analytics',
   'admin-case-acceptance':     '/admin/case-acceptance',
+  'admin-ad-leads':            '/admin/ad-leads',
   'admin-delete-requests':     '/admin/delete-requests',
   'admin-edit-requests':       '/admin/edit-requests',
   'admin-activity-log':        '/admin/activity-log',
   'admin-clinician-profile':   '/admin/clinician-profile',
   'dropout-entry':             '/dropout-entry',
   'case-acceptance-entry':     '/case-acceptance-entry',
+  'ad-leads-entry':            '/ad-leads-entry',
   'drafts':                    '/drafts',
   'ad-spend-entry':            '/ad-spend',
   'clinician-home':            '/clinician-home',
   'frontdesk-home':            '/frontdesk-home',
+  'admin-home':                '/admin-home',
 }
 
 const PATH_PAGE: Record<string, AppPage> = Object.fromEntries(

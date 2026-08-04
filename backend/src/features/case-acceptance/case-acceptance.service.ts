@@ -1,12 +1,16 @@
 import {
-  caseAcceptanceRepository, CaseAcceptanceDTO, ListFilters,
-  PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX,
+  caseAcceptanceRepository, CaseAcceptanceDTO, CaseAcceptanceDupKey, ListFilters,
+  caseAcceptanceLockKey, PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX,
 } from './case-acceptance.repository';
-import { userRepository } from '../../repositories/user.repository';
+import { userRepository, canBeTreatingClinician } from '../../repositories/user.repository';
 import { RequestScope } from '../../middleware/auth.middleware';
 import { Errors } from '../../shared/errors';
+import { withTransaction } from '../../db/pool';
 import {
-  CreateCaseAcceptanceBody, UpdateCaseAcceptanceBody,
+  DuplicateReport, OnDuplicate, duplicateConflict, lockDuplicateKey,
+} from '../../shared/duplicates';
+import {
+  CheckCaseAcceptanceDuplicateBody, CreateCaseAcceptanceBody, UpdateCaseAcceptanceBody,
 } from './case-acceptance.validators';
 
 export interface PagedCaseAcceptance {
@@ -17,6 +21,45 @@ export interface PagedCaseAcceptance {
     total:    number;
     hasMore:  boolean;
   };
+}
+
+/**
+ * Result of create(): the route needs to know whether a row was inserted or an
+ * existing one replaced, to pick 201 vs 200 and the right audit action.
+ */
+export interface CreateCaseAcceptanceResult {
+  row:      CaseAcceptanceDTO;
+  outcome:  'created' | 'overwritten';
+  /** The row as it looked BEFORE an overwrite — goes into the audit trail. */
+  replaced: CaseAcceptanceDTO | null;
+}
+
+/**
+ * Who may overwrite an existing case-acceptance entry in place.
+ *
+ * ADMIN ONLY — and deliberately stricter than the dropout rule. update() below
+ * already forbids every non-admin edit and routes them through the
+ * edit-request approval flow; letting "overwrite on duplicate" write directly
+ * would be a way around that. Non-admins get the edit-request path instead.
+ */
+function canOverwriteCaseAcceptance(scope: RequestScope): boolean {
+  return scope.role === 'ADMIN';
+}
+
+/**
+ * Which clinic an entry belongs to. FRONT_DESK_GLOBAL / CLINICIAN / ADMIN have
+ * no pinned clinic and choose per entry; FRONT_DESK is pinned by scope so it
+ * cannot cross clinics.
+ */
+function resolveClinicId(scope: RequestScope, requested?: string): string {
+  if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'CLINICIAN' || scope.role === 'ADMIN') {
+    if (!requested) {
+      throw Errors.validation('clinic_id is required — pick which clinic this entry is for');
+    }
+    return requested;
+  }
+  if (!scope.clinic_id) throw Errors.forbidden('User has no clinic assigned');
+  return scope.clinic_id;
 }
 
 export const caseAcceptanceService = {
@@ -75,33 +118,52 @@ export const caseAcceptanceService = {
     return row;
   },
 
-  async create(scope: RequestScope, input: CreateCaseAcceptanceBody): Promise<CaseAcceptanceDTO> {
-    if (scope.role === 'ADMIN') {
-      throw Errors.forbidden('ADMIN cannot create case acceptance entries — use a clinician/front-desk account');
-    }
+  /**
+   * Pre-flight duplicate lookup for the entry form. Advisory only — create()
+   * re-checks under a lock, because between this call and the POST another
+   * user can key the very same entry.
+   */
+  async checkDuplicate(
+    scope: RequestScope,
+    input: CheckCaseAcceptanceDuplicateBody
+  ): Promise<DuplicateReport<CaseAcceptanceDTO>> {
+    const clinicId = resolveClinicId(scope, input.clinic_id);
+    const { exact, similar } = await caseAcceptanceRepository.findDuplicates(
+      {
+        clinic_id:    clinicId,
+        clinician_id: input.clinician_id,
+        patient_name: input.patient_name,
+        date_logged:  input.date_logged,
+      },
+      { excludeId: input.exclude_id }
+    );
+    return {
+      exact,
+      similar,
+      can_overwrite: exact ? canOverwriteCaseAcceptance(scope) : false,
+    };
+  },
 
+  async create(
+    scope: RequestScope,
+    input: CreateCaseAcceptanceBody
+  ): Promise<CreateCaseAcceptanceResult> {
     // Resolve the entry's clinic. FRONT_DESK_GLOBAL and CLINICIAN both pick
     // per entry — physios rotate between clinics, so a CLINICIAN account
     // can log entries against any clinic regardless of their primary
-    // users.clinic_id. FRONT_DESK (single-clinic receptionist) remains
+    // users.clinic_id. ADMIN (super admin) also has no pinned clinic and
+    // picks per entry. FRONT_DESK (single-clinic receptionist) remains
     // pinned by scope so they can't cross clinics.
-    let clinicId: string;
-    if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'CLINICIAN') {
-      if (!input.clinic_id) {
-        throw Errors.validation('clinic_id is required — pick which clinic this entry is for');
-      }
-      clinicId = input.clinic_id;
-    } else {
-      if (!scope.clinic_id) throw Errors.forbidden('User has no clinic assigned');
-      clinicId = scope.clinic_id;
-    }
+    const clinicId = resolveClinicId(scope, input.clinic_id);
 
     const clinician = await userRepository.findById(input.clinician_id);
     if (!clinician || !clinician.is_active) {
       throw Errors.validation(`Clinician ${input.clinician_id} not found or inactive`);
     }
-    if (clinician.role !== 'CLINICIAN') {
-      throw Errors.validation(`User ${input.clinician_id} is not a clinician`);
+    if (!canBeTreatingClinician(clinician)) {
+      throw Errors.validation(
+        `${clinician.full_name || clinician.email} cannot be tagged as the treating clinician`
+      );
     }
 
     // Receptionist accounts (FRONT_DESK / FRONT_DESK_GLOBAL) get their
@@ -118,9 +180,15 @@ export const caseAcceptanceService = {
       frontStaffName = input.front_staff_name ?? null;
     }
 
-    return caseAcceptanceRepository.create({
-      clinic_id:               clinicId,
-      entered_by:              scope.userId,
+    const key: CaseAcceptanceDupKey = {
+      clinic_id:    clinicId,
+      clinician_id: input.clinician_id,
+      patient_name: input.patient_name,
+      date_logged:  input.date_logged,
+    };
+    const onDuplicate: OnDuplicate = input.on_duplicate ?? 'reject';
+
+    const values = {
       front_staff_name:        frontStaffName,
       clinician_id:            input.clinician_id,
       patient_name:            input.patient_name,
@@ -132,6 +200,44 @@ export const caseAcceptanceService = {
       prepay_accepted:         input.prepay_accepted ?? null,
       transition_notes:        input.transition_notes ?? null,
       notes:                   input.notes ?? null,
+    };
+
+    // Check and write under one advisory lock so two identical POSTs racing
+    // (double-click, two tabs, two staff keying the same patient) cannot both
+    // pass the check. The lock is transaction-scoped — no manual release.
+    return withTransaction(async (client) => {
+      await lockDuplicateKey(client, caseAcceptanceLockKey(key));
+      const { exact, similar } = await caseAcceptanceRepository.findDuplicates(key, {}, client);
+
+      // 'allow' = the user saw the diff and confirmed it is a separate entry.
+      if (exact && onDuplicate !== 'allow') {
+        const canOverwrite = canOverwriteCaseAcceptance(scope);
+
+        if (onDuplicate === 'reject') {
+          throw duplicateConflict<CaseAcceptanceDTO>('case acceptance entry', {
+            exact, similar, can_overwrite: canOverwrite,
+          });
+        }
+
+        // onDuplicate === 'overwrite'
+        if (!canOverwrite) {
+          throw Errors.forbidden(
+            'Changing an existing entry needs admin approval — submit an edit request instead'
+          );
+        }
+        await caseAcceptanceRepository.update(exact.id, values, scope.userId, client);
+
+        const updated = await caseAcceptanceRepository.findJoinedById(exact.id, client);
+        if (!updated) throw Errors.notFound(`Case acceptance ${exact.id} not found`);
+        return { row: updated, outcome: 'overwritten' as const, replaced: exact };
+      }
+
+      const created = await caseAcceptanceRepository.create({
+        clinic_id:  clinicId,
+        entered_by: scope.userId,
+        ...values,
+      }, client);
+      return { row: created, outcome: 'created' as const, replaced: null };
     });
   },
 
@@ -152,8 +258,10 @@ export const caseAcceptanceService = {
       if (!clinician || !clinician.is_active) {
         throw Errors.validation(`Clinician ${patch.clinician_id} not found or inactive`);
       }
-      if (clinician.role !== 'CLINICIAN') {
-        throw Errors.validation(`User ${patch.clinician_id} is not a clinician`);
+      if (!canBeTreatingClinician(clinician)) {
+        throw Errors.validation(
+          `${clinician.full_name || clinician.email} cannot be tagged as the treating clinician`
+        );
       }
     }
 

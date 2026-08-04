@@ -90,6 +90,28 @@ export default function UserManagementPage() {
     } finally { setCreating(false) }
   }
 
+  const onEditEmail = async (u: User) => {
+    const email = await promptDialog.ask({
+      title:        'Edit email address',
+      message:      `Update the login email for ${u.full_name || u.email}.`,
+      inputType:    'text',
+      defaultValue: u.email,
+      placeholder:  'name@physioward.com.au',
+      confirmLabel: 'Save email',
+      validate:     (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? null : 'Enter a valid email address',
+    })
+    if (email === null) return
+    const next = email.trim()
+    if (next.toLowerCase() === u.email.toLowerCase()) return
+    try {
+      await usersApi.update(u.id, { email: next })
+      toast.success(`Email updated for ${u.full_name || next}`)
+      await load()
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || 'Failed to update email')
+    }
+  }
+
   const onResetPassword = async (u: User) => {
     const pwd = await promptDialog.ask({
       title:        'Reset password',
@@ -229,6 +251,7 @@ export default function UserManagementPage() {
                     </Td>
                     <Td align="right">
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button onClick={() => onEditEmail(u)} style={smallBtnStyle}>Edit email</button>
                         <button onClick={() => onResetPassword(u)} style={smallBtnStyle}>Reset PW</button>
                         {u.is_active
                           ? <button onClick={() => onDeactivate(u)} style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}>Deactivate</button>

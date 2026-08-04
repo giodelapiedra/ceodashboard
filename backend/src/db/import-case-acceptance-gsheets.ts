@@ -100,21 +100,56 @@ function pad2(n: string | number): string {
   return String(n).padStart(2, '0');
 }
 
+function daysInMonth(year: number, month: number): number {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
+}
+
+/**
+ * Assemble an AU-format (day, month) date into YYYY-MM-DD, but only if it's a
+ * REAL calendar date. Two guards, both critical — a structurally-valid-looking
+ * but impossible date (e.g. month 13) would pass the dry-run's format check and
+ * then abort the whole COMMIT transaction at INSERT time (Postgres rejects
+ * "2026-13-07"), silently blocking the entire import.
+ *
+ *  1. US-format repair: these sheets are AU D/M/Y, so a "month" > 12 is an
+ *     unambiguous month/day swap (someone typed 07/13/2026 = 13 July). Swap it.
+ *  2. Anything still out of range (bad day, month, or an un-swappable pair)
+ *     returns null so the caller skips + reports the row instead of crashing.
+ *
+ * `yyyy` is kept as the original string so run()'s wrong-year coercion (which
+ * slices off a 4-char year) keeps working for typo years like "0206".
+ */
+function assembleDate(day: number, month: number, yyyy: string): string | null {
+  const rawDay = day, rawMonth = month;
+  if (month > 12 && day <= 12) { const t = day; day = month; month = t; }
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(parseInt(yyyy, 10), month)) return null;
+  if (rawMonth !== month) {
+    console.log(`  [date-repair] month>12 → read ${rawDay}/${rawMonth}/${yyyy} as AU d/m → ${yyyy}-${pad2(month)}-${pad2(day)}`);
+  }
+  return `${yyyy}-${pad2(month)}-${pad2(day)}`;
+}
+
 function parseDateLogged(raw: string | null): string | null {
   if (!raw) return null;
   const s = raw.trim();
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return s.slice(0, 10);
+  if (m) {
+    // ISO carries explicit month/day; validate it (a >12 month here would be
+    // impossible anyway, so the swap in assembleDate can only help).
+    return assembleDate(parseInt(m[3], 10), parseInt(m[2], 10), m[1]);
+  }
   // Australian D/M/YYYY or D/M/YY
   m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m) {
     const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), yyyy);
   }
   m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (m) {
     const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-    return `${yyyy}-${pad2(m[2])}-${pad2(m[1])}`;
+    return assembleDate(parseInt(m[1], 10), parseInt(m[2], 10), yyyy);
   }
   return null;
 }

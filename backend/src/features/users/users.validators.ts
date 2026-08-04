@@ -39,10 +39,12 @@ export const createUserSchema = z.object({
 });
 
 export const updateUserSchema = z.object({
+  email:     z.string().email().max(254).optional(),
   full_name: z.string().min(1).max(120).trim().optional(),
   role:      roleEnum.optional(),
   clinic_id: clinicEnum.nullable().optional(),
   is_active: z.boolean().optional(),
+  show_in_picker: z.boolean().optional(),
 }).superRefine((val, ctx) => {
   if (val.role !== undefined && val.clinic_id !== undefined) {
     if (isCrossClinic(val.role) && val.clinic_id !== null) {

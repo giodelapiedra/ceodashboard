@@ -45,6 +45,15 @@ export const usersService = {
     const existing = await userRepository.findById(id);
     if (!existing) throw Errors.notFound(`User ${id} not found`);
 
+    // Email is the login identifier, so it must stay unique. Reject if another
+    // account already uses the requested address (case-insensitive match).
+    if (patch.email !== undefined) {
+      const clash = await userRepository.findByEmail(patch.email);
+      if (clash && String(clash.id) !== String(id)) {
+        throw Errors.conflict(`Email ${patch.email} is already in use`);
+      }
+    }
+
     const updated = await userRepository.update(id, patch);
     if (!updated) throw Errors.notFound(`User ${id} not found`);
 
@@ -81,12 +90,31 @@ export const usersService = {
     return this.update(id, { is_active: true });
   },
 
-  /** Used by the dropout entry form's "clinician" dropdown. */
+  /**
+   * Used by the entry-form "clinician" dropdowns (and the admin filter
+   * dropdowns). Only returns staff flagged to appear in pickers, so ex-physios
+   * whose accounts stay active (and whose data stays in the dashboard) drop out
+   * of the selection lists.
+   */
   async listActiveByClinic(clinicId: string, role: Role): Promise<UserPublicDTO[]> {
     const rows = await userRepository.list({
-      clinic_id: clinicId,
+      clinic_id:      clinicId,
       role,
-      active:    true,
+      active:         true,
+      show_in_picker: true,
+      // A flagged super admin who also treats should surface in the clinician picker.
+      include_also_clinician: role === 'CLINICIAN',
+    });
+    return rows.map(toPublicDTO);
+  },
+
+  /** Cross-clinic variant of {@link listActiveByClinic} (no clinic filter). */
+  async listActiveForPicker(role: Role): Promise<UserPublicDTO[]> {
+    const rows = await userRepository.list({
+      role,
+      active:         true,
+      show_in_picker: true,
+      include_also_clinician: role === 'CLINICIAN',
     });
     return rows.map(toPublicDTO);
   },

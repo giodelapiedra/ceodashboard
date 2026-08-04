@@ -7,6 +7,7 @@ import {
   createCaseAcceptanceSchema,
   updateCaseAcceptanceSchema,
   listCaseAcceptanceQuerySchema,
+  checkCaseAcceptanceDuplicateSchema,
 } from './case-acceptance.validators';
 import { CLINICS } from '../../types';
 
@@ -296,13 +297,36 @@ router.get('/:id', async (req: AuthRequest, res: Response, next: NextFunction) =
   } catch (err) { next(err); }
 });
 
+// POST /api/case-acceptance/check-duplicate — pre-flight for the entry form.
+// POST (not GET) because it takes the whole natural key as a body. Read-only.
+router.post('/check-duplicate', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const body   = checkCaseAcceptanceDuplicateSchema.parse(req.body);
+    const report = await caseAcceptanceService.checkDuplicate(req.scope!, body);
+    res.json(report);
+  } catch (err) { next(err); }
+});
+
 // POST /api/case-acceptance
+// 201 on insert; 200 when the caller asked to overwrite an existing entry
+// (nothing new was created, so 201 would be a lie).
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const body = createCaseAcceptanceSchema.parse(req.body);
-    const row  = await caseAcceptanceService.create(req.scope!, body);
-    await audit(req.scope!.userId, 'case_acceptance.create', { id: row.id, clinic_id: row.clinic_id });
-    res.status(201).json(row);
+    const body   = createCaseAcceptanceSchema.parse(req.body);
+    const { row, outcome, replaced } = await caseAcceptanceService.create(req.scope!, body);
+
+    if (outcome === 'overwritten') {
+      // Keep the pre-overwrite values — an overwrite is the one path in this
+      // feature that destroys data, so the audit trail has to be able to
+      // reconstruct it.
+      await audit(req.scope!.userId, 'case_acceptance.overwrite', {
+        id: row.id, clinic_id: row.clinic_id, before: replaced, after: row,
+      });
+      res.status(200).json(row);
+    } else {
+      await audit(req.scope!.userId, 'case_acceptance.create', { id: row.id, clinic_id: row.clinic_id });
+      res.status(201).json(row);
+    }
   } catch (err) { next(err); }
 });
 

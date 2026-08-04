@@ -115,6 +115,14 @@ export const adSpendService = {
     return Array.from(weekMap.values());
   },
 
+  /** Paid (Nookal) vs ad spend per platform group — all-time by default,
+   *  optionally windowed (leads by date_added, spend by spend_date).
+   *  ADMIN-only at the route level — it exposes lead revenue, which the
+   *  ADSPEND encoder has no business seeing. */
+  async leadsRoi(dateFrom?: string, dateTo?: string) {
+    return adSpendRepository.leadsRoi(dateFrom ?? null, dateTo ?? null);
+  },
+
   async delete(scope: RequestScope, id: string): Promise<void> {
     const existing = await adSpendRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Ad spend ${id} not found`);

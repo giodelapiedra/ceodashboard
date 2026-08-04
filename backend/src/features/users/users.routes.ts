@@ -48,8 +48,11 @@ router.get('/staff', async (req: AuthRequest, res: Response, next: NextFunction)
       clinicId = scope.clinic_id;
     }
 
+    // Both branches exclude staff flagged out of pickers (show_in_picker=false)
+    // — e.g. former physios whose accounts stay active and whose data stays in
+    // the dashboard, but who should no longer be selectable for new entries.
     if (clinicId === null) {
-      const rows = await usersService.list({ role: roleParam as Role, active: true });
+      const rows = await usersService.listActiveForPicker(roleParam as Role);
       return res.json(rows);
     }
     const rows = await usersService.listActiveByClinic(clinicId, roleParam as Role);

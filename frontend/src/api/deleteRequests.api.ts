@@ -1,6 +1,6 @@
 import api from './client'
 
-export type DeleteEntityType = 'dropout' | 'case_acceptance'
+export type DeleteEntityType = 'dropout' | 'case_acceptance' | 'ad_lead'
 export type DeleteRequestStatus = 'pending' | 'approved' | 'rejected'
 
 export interface DeleteRequestDTO {

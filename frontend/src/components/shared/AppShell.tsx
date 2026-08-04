@@ -2,11 +2,16 @@ import React, { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { useAuthStore } from '../../store/auth.store'
 import { useNavStore, AppPage } from '../../store/nav.store'
-import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId } from '../../types'
+import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
+import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId, isAdLeadsEncoder } from '../../types'
 import { useMediaBelow } from '../../hooks/useMediaBelow'
 
 const TEAL    = '#0f6e56'
 const HEADER  = '#1e2547'
+const DANGER  = '#b91c1c'
+
+/** Red count bubbles on nav items, keyed by the page they point at. */
+type NavBadges = Partial<Record<AppPage, number>>
 
 interface NavLeaf {
   page:  AppPage
@@ -31,6 +36,9 @@ const NAV_TREE: Record<Role, NavItem[]> = {
       { page: 'admin-case-acceptance', label: 'Reports'          },
       { page: 'case-acceptance-entry', label: 'Manage entries'   },
     ]},
+    { kind: 'group', label: 'Ad Leads', items: [
+      { page: 'admin-ad-leads',        label: 'Meta/Google Leads' },
+    ]},
     { kind: 'group', label: 'Admin', items: [
       { page: 'admin-users',           label: 'User Management'  },
       { page: 'admin-delete-requests', label: 'Delete Requests'  },
@@ -43,11 +51,13 @@ const NAV_TREE: Record<Role, NavItem[]> = {
   FRONT_DESK: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
+    { kind: 'link', page: 'ad-leads-entry',        label: 'Meta/Google Leads' },
     { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
   FRONT_DESK_GLOBAL: [
     { kind: 'link', page: 'dropout-entry',         label: 'Patient Dropouts' },
     { kind: 'link', page: 'case-acceptance-entry', label: 'Case Acceptance'  },
+    { kind: 'link', page: 'ad-leads-entry',        label: 'Meta/Google Leads' },
     { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
   ADSPEND: [
@@ -60,12 +70,16 @@ interface Props {
   /** If true, the shell renders the page header bar; otherwise the page handles
    *  its own header (DashboardPage already does this). */
   withHeader?: boolean
+  /** Hide the top navigation links (used on the card-style choice hubs — the
+   *  cards ARE the navigation there, so the menu would just be clutter). */
+  hideNav?:   boolean
   title?:     string
 }
 
-export default function AppShell({ children, withHeader = true, title }: Props) {
+export default function AppShell({ children, withHeader = true, hideNav = false, title }: Props) {
   const { user, logout, accessToken } = useAuthStore()
   const { page, navigate } = useNavStore()
+  const { editCount, deleteCount } = usePendingApprovalsStore()
 
   // Single open-group state — opening one group auto-closes any other.
   const [openGroup, setOpenGroup]         = useState<string | null>(null)
@@ -78,18 +92,42 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
 
   if (!user) return <>{children}</>
 
-  const items = NAV_TREE[user.role] ?? []
+  // Ad Leads (Meta/Google Leads) is restricted to specific front-desk logins
+  // (see AD_LEADS_ENCODER_EMAILS). Every other front-desk account never sees the
+  // encode link. ADMIN's "Meta/Google Leads" is a separate admin page, unaffected.
+  const canSeeAdLeads = isAdLeadsEncoder(user.email)
+  const items = hideNav ? [] : (NAV_TREE[user.role] ?? []).filter((it) =>
+    !(it.kind === 'link' && it.page === 'ad-leads-entry' && !canSeeAdLeads)
+  )
   const go = (p: AppPage) => { setOpenGroup(null); setMenuOpen(false); navigate(p) }
+
+  // Pending approvals only concern the super admin. Two signals, both persistent
+  // (a toast was too easy to miss): red badges on the Admin menu, and a red bar
+  // under the header on every page except the queues themselves.
+  const isAdmin = user.role === 'ADMIN'
+  const badges: NavBadges = isAdmin
+    ? { 'admin-edit-requests': editCount, 'admin-delete-requests': deleteCount }
+    : {}
+  const pendingTotal = isAdmin ? editCount + deleteCount : 0
+  const onQueuePage  = page === 'admin-edit-requests' || page === 'admin-delete-requests'
+  const showPendingBar = pendingTotal > 0 && !onQueuePage
 
   // Roles with a card-style landing page get a "← Home" button when away from it.
   const homePage: AppPage | null =
     user.role === 'CLINICIAN' ? 'clinician-home'
     : (user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL') ? 'frontdesk-home'
+    : user.role === 'ADMIN' ? 'admin-home'
     : null
   const showHome = homePage !== null && page !== homePage
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0f2f5', fontFamily: "'DM Sans', sans-serif" }}>
+      <style>{`
+        @keyframes pwBadgePulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.55) }
+          50%      { box-shadow: 0 0 0 5px rgba(220,38,38,0) }
+        }
+      `}</style>
       <header
         className="no-print"
         style={{
@@ -126,6 +164,7 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
                 key={item.label}
                 label={item.label}
                 items={item.items}
+                badges={badges}
                 currentPage={page}
                 isOpen={openGroup === item.label}
                 onToggle={() => setOpenGroup(openGroup === item.label ? null : item.label)}
@@ -157,17 +196,28 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
         </div>
 
         {isMobile ? (
-          <button
-            onClick={() => setMenuOpen(o => !o)}
-            aria-label="Menu"
-            aria-expanded={menuOpen}
-            style={{
-              background: menuOpen ? 'rgba(255,255,255,0.12)' : 'transparent',
-              border: '1px solid rgba(255,255,255,0.25)',
-              color: '#fff', borderRadius: 8, padding: '8px 12px',
-              fontSize: 18, lineHeight: 1, cursor: 'pointer',
-            }}
-          >{menuOpen ? '✕' : '☰'}</button>
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setMenuOpen(o => !o)}
+              aria-label={pendingTotal > 0 ? `Menu — ${pendingTotal} pending approvals` : 'Menu'}
+              aria-expanded={menuOpen}
+              style={{
+                background: menuOpen ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: '1px solid rgba(255,255,255,0.25)',
+                color: '#fff', borderRadius: 8, padding: '8px 12px',
+                fontSize: 18, lineHeight: 1, cursor: 'pointer',
+              }}
+            >{menuOpen ? '✕' : '☰'}</button>
+            {pendingTotal > 0 && !menuOpen && (
+              <span style={{
+                position: 'absolute', top: -5, right: -5,
+                minWidth: 18, height: 18, padding: '0 5px',
+                borderRadius: 9, background: '#dc2626', color: '#fff',
+                fontSize: 11, fontWeight: 800, lineHeight: '18px', textAlign: 'center',
+                animation: 'pwBadgePulse 1.8s ease-in-out infinite',
+              }}>{pendingTotal}</span>
+            )}
+          </div>
         ) : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
@@ -208,6 +258,7 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
       {isMobile && menuOpen && (
         <MobileMenu
           items={items}
+          badges={badges}
           currentPage={page}
           userLine1={user.full_name || user.email}
           userLine2={`${ROLE_LABEL[user.role]}${user.clinic_id ? ` · ${CLINIC_LABEL[user.clinic_id as ClinicId]}` : ''}`}
@@ -216,6 +267,15 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
           onHome={() => { setMenuOpen(false); navigate(homePage!) }}
           onChangePwd={() => { setMenuOpen(false); setShowChangePwd(true) }}
           onLogout={logout}
+        />
+      )}
+
+      {showPendingBar && (
+        <PendingApprovalsBar
+          editCount={editCount}
+          deleteCount={deleteCount}
+          isMobile={isMobile}
+          onReview={(p) => go(p)}
         />
       )}
 
@@ -238,6 +298,90 @@ export default function AppShell({ children, withHeader = true, title }: Props) 
 
       <main>{children}</main>
     </div>
+  )
+}
+
+// ── Pending approvals bar ──────────────────────────────────────────────
+
+/**
+ * Always-on red strip under the header while edit/delete requests sit unreviewed.
+ * Unlike the login pop-up this cannot be dismissed — it disappears only when the
+ * queues are empty, so a request can never be silently forgotten.
+ */
+function PendingApprovalsBar({
+  editCount, deleteCount, isMobile, onReview,
+}: {
+  editCount:   number
+  deleteCount: number
+  isMobile:    boolean
+  onReview:    (p: AppPage) => void
+}) {
+  const total = editCount + deleteCount
+  const parts: string[] = []
+  if (editCount   > 0) parts.push(`${editCount} edit request${editCount === 1 ? '' : 's'}`)
+  if (deleteCount > 0) parts.push(`${deleteCount} delete request${deleteCount === 1 ? '' : 's'}`)
+
+  const btn: React.CSSProperties = {
+    background: '#fff', color: DANGER,
+    border: 'none', borderRadius: 6,
+    padding: '6px 13px', fontSize: 12.5, fontWeight: 700,
+    cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+    whiteSpace: 'nowrap',
+  }
+
+  return (
+    <div
+      className="no-print"
+      role="status"
+      style={{
+        background: DANGER, color: '#fff',
+        padding: isMobile ? '10px 16px' : '10px 28px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, flexWrap: 'wrap',
+        boxShadow: '0 2px 6px rgba(185,28,28,0.25)',
+        position: 'relative', zIndex: 28,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <span style={{
+          flexShrink: 0,
+          width: 22, height: 22, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.22)',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 13, fontWeight: 800,
+        }}>!</span>
+        <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+          {parts.join(' and ')} waiting for your approval
+          {total > 0 ? ' — staff can’t proceed until you decide.' : ''}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+        {editCount > 0 && (
+          <button style={btn} onClick={() => onReview('admin-edit-requests')}>
+            Review edits →
+          </button>
+        )}
+        {deleteCount > 0 && (
+          <button style={btn} onClick={() => onReview('admin-delete-requests')}>
+            Review deletions →
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Small red count bubble used on nav items. */
+function CountBadge({ n, pulse = false }: { n: number; pulse?: boolean }) {
+  if (!n) return null
+  return (
+    <span style={{
+      display: 'inline-block',
+      minWidth: 18, padding: '0 5px',
+      borderRadius: 9, background: '#dc2626', color: '#fff',
+      fontSize: 11, fontWeight: 800, lineHeight: '18px', textAlign: 'center',
+      animation: pulse ? 'pwBadgePulse 1.8s ease-in-out infinite' : undefined,
+    }}>{n}</span>
   )
 }
 
@@ -418,10 +562,11 @@ function ChangePasswordModal({ accessToken, onClose, onSuccess }: ChangePwdProps
 // ── Mobile menu ────────────────────────────────────────────────────────
 
 function MobileMenu({
-  items, currentPage, userLine1, userLine2, showHome,
+  items, badges, currentPage, userLine1, userLine2, showHome,
   onNavigate, onHome, onChangePwd, onLogout,
 }: {
   items:       NavItem[]
+  badges:      NavBadges
   currentPage: AppPage
   userLine1:   string
   userLine2:   string
@@ -432,7 +577,8 @@ function MobileMenu({
   onLogout:    () => void
 }) {
   const itemBtn = (active: boolean): React.CSSProperties => ({
-    display: 'block', width: '100%', textAlign: 'left',
+    display: 'flex', alignItems: 'center', gap: 8,
+    width: '100%', textAlign: 'left',
     background: active ? '#f0faf7' : 'transparent',
     color: active ? TEAL : '#111827',
     border: 'none', borderRadius: 8,
@@ -456,16 +602,22 @@ function MobileMenu({
       {items.map((item) => item.kind === 'link' ? (
         <button key={item.page} onClick={() => onNavigate(item.page)} style={itemBtn(currentPage === item.page)}>
           {item.label}
+          <CountBadge n={badges[item.page] ?? 0} />
         </button>
       ) : (
         <div key={item.label}>
           <div style={{
             padding: '12px 14px 4px', fontSize: 11, fontWeight: 700,
             color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase',
-          }}>{item.label}</div>
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            {item.label}
+            <CountBadge n={item.items.reduce((s, l) => s + (badges[l.page] ?? 0), 0)} pulse />
+          </div>
           {item.items.map((leaf) => (
             <button key={leaf.page} onClick={() => onNavigate(leaf.page)} style={itemBtn(currentPage === leaf.page)}>
               {leaf.label}
+              <CountBadge n={badges[leaf.page] ?? 0} />
             </button>
           ))}
         </div>
@@ -507,10 +659,11 @@ function NavLink({
 }
 
 function NavGroup({
-  label, items, currentPage, isOpen, onToggle, onClose, onNavigate,
+  label, items, badges, currentPage, isOpen, onToggle, onClose, onNavigate,
 }: {
   label:       string
   items:       NavLeaf[]
+  badges:      NavBadges
   currentPage: AppPage
   isOpen:      boolean
   onToggle:    () => void
@@ -538,6 +691,7 @@ function NavGroup({
 
   const childActive = items.some((i) => i.page === currentPage)
   const triggerActive = childActive || isOpen
+  const groupBadge = items.reduce((s, i) => s + (badges[i.page] ?? 0), 0)
 
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
@@ -562,6 +716,7 @@ function NavGroup({
         }}
       >
         {label}
+        <CountBadge n={groupBadge} pulse />
         <span style={{
           fontSize: 9,
           opacity:  0.65,
@@ -607,7 +762,9 @@ function NavGroup({
                 onClick={() => onNavigate(leaf.page)}
                 className="nav-drop-item"
                 style={{
-                  display:      'block',
+                  display:      'flex',
+                  alignItems:   'center',
+                  gap:          8,
                   width:        '100%',
                   textAlign:    'left',
                   background:   active ? '#f0faf7' : 'transparent',
@@ -623,6 +780,7 @@ function NavGroup({
                 }}
               >
                 {leaf.label}
+                <CountBadge n={badges[leaf.page] ?? 0} />
               </button>
             )
           })}

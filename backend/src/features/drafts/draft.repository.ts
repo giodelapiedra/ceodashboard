@@ -94,7 +94,8 @@ export const draftRepository = {
     return toDTO(rows[0]);
   },
 
-  async update(id: string, patch: UpdateDraftInput): Promise<DraftDTO> {
+  /** Returns null when the draft no longer exists (deleted concurrently). */
+  async update(id: string, patch: UpdateDraftInput): Promise<DraftDTO | null> {
     const { rows } = await query<DraftRow>(
       `UPDATE entry_drafts
           SET clinic_id    = $2,
@@ -105,7 +106,7 @@ export const draftRepository = {
         RETURNING *`,
       [id, patch.clinic_id, patch.patient_name, patch.form_data]
     );
-    return toDTO(rows[0]);
+    return rows[0] ? toDTO(rows[0]) : null;
   },
 
   async delete(id: string): Promise<void> {
