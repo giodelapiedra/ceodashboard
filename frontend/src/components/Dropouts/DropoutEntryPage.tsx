@@ -150,6 +150,10 @@ export default function DropoutEntryPage() {
   // can only edit (not create), but the form pre-loads clinic_id from the
   // edited row so they see the dropdown too.
   const picksClinic        = isClinician || isFrontDeskGlobal || user.role === 'ADMIN'
+  // Only the cross-clinic roles get the Clinic filter — FRONT_DESK is pinned to
+  // its own clinic and CLINICIAN sees their own entries wherever they worked,
+  // and for both the server ignores a clinic_id filter anyway.
+  const canFilterClinic    = isFrontDeskGlobal || user.role === 'ADMIN'
 
   const [rows,    setRows]    = useState<DropoutDTO[]>([])
   const [total,   setTotal]   = useState(0)
@@ -167,8 +171,9 @@ export default function DropoutEntryPage() {
   const [statusFilter,   setStatusFilter]   = useState<DropoutStatus | ''>('')
   const [reasonFilter,   setReasonFilter]   = useState<DropoutReason | ''>('')
   const [clinicianFilter, setClinicianFilter] = useState('')
+  const [clinicFilter,   setClinicFilter]   = useState<ClinicId | ''>('')
 
-  useEffect(() => { resetPage() }, [search, dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, resetPage])
+  useEffect(() => { resetPage() }, [search, dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, clinicFilter, resetPage])
 
   const [clinicians, setClinicians] = useState<User[]>([])
 
@@ -264,6 +269,7 @@ export default function DropoutEntryPage() {
     status:       statusFilter || undefined,
     reason:       reasonFilter || undefined,
     clinician_id: clinicianFilter || undefined,
+    clinic_id:    clinicFilter    || undefined,
     search:       search       || undefined,
   }
 
@@ -290,7 +296,7 @@ export default function DropoutEntryPage() {
       if (seq === loadSeq.current) setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, search, limit, offset])
+  }, [dateFrom, dateTo, statusFilter, reasonFilter, clinicianFilter, clinicFilter, search, limit, offset])
 
   useEffect(() => { load() }, [load])
 
@@ -1037,6 +1043,19 @@ export default function DropoutEntryPage() {
               />
             </div>
           </div>
+          {canFilterClinic && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Clinic</span>
+              <select
+                value={clinicFilter}
+                onChange={e => setClinicFilter(e.target.value as ClinicId | '')}
+                style={inputStyle}
+              >
+                <option value="">All Clinics</option>
+                {CLINIC_OPTIONS.map(c => <option key={c} value={c}>{CLINIC_LABEL[c]}</option>)}
+              </select>
+            </div>
+          )}
           {isFrontDeskGlobal && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Clinician</span>
@@ -1090,8 +1109,8 @@ export default function DropoutEntryPage() {
             <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>
               {user.role === 'CLINICIAN'
                 ? 'My entries'
-                : isFrontDeskGlobal
-                  ? 'Entries — All clinics'
+                : canFilterClinic
+                  ? `Entries — ${clinicFilter ? CLINIC_LABEL[clinicFilter] : 'All clinics'}`
                   : `Entries — ${user.clinic_id ? CLINIC_LABEL[user.clinic_id as ClinicId] : ''}`}
               <span style={{ color: TEXT_SOFT, fontWeight: 400, marginLeft: 8 }}>
                 ({total.toLocaleString()}{search ? ` matching "${search}"` : ''})
@@ -1121,7 +1140,7 @@ export default function DropoutEntryPage() {
                 <thead>
                   <tr style={{ background: '#f9fafb' }}>
                     <Th>Date</Th>
-                    {isFrontDeskGlobal && <Th>Clinic</Th>}
+                    {canFilterClinic && <Th>Clinic</Th>}
                     <Th>Front of staff</Th>
                     <Th>Clinician</Th>
                     <Th>Patient</Th>
@@ -1136,7 +1155,7 @@ export default function DropoutEntryPage() {
                   {rows.map(r => (
                     <tr key={r.id} style={{ borderTop: `1px solid ${BORDER}` }}>
                       <Td>{r.date_logged}</Td>
-                      {isFrontDeskGlobal && <Td>{CLINIC_LABEL[r.clinic_id]}</Td>}
+                      {canFilterClinic && <Td>{CLINIC_LABEL[r.clinic_id]}</Td>}
                       <Td>{r.front_staff_name || <Dim>—</Dim>}</Td>
                       <Td>{r.clinician_name || <Dim>—</Dim>}</Td>
                       <Td><strong>{r.patient_name}</strong></Td>
