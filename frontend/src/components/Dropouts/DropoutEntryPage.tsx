@@ -252,9 +252,15 @@ export default function DropoutEntryPage() {
   }, [isAdmin])
   useEffect(() => { reloadPending() }, [reloadPending])
 
+  // Searching by name looks across ALL history — the date window is dropped
+  // while a search is active. Looking a patient up by name means you don't
+  // know when they were logged, so the visible window is the wrong constraint
+  // (an entry saved today vanished behind a range someone left on last month).
+  const searching = search.length > 0
+
   const filterParams = {
-    date_from:    dateFrom     || undefined,
-    date_to:      dateTo       || undefined,
+    date_from:    searching ? undefined : (dateFrom || undefined),
+    date_to:      searching ? undefined : (dateTo   || undefined),
     status:       statusFilter || undefined,
     reason:       reasonFilter || undefined,
     clinician_id: clinicianFilter || undefined,
@@ -505,8 +511,10 @@ export default function DropoutEntryPage() {
         ? [...form.appointment_cancelled_dates, form.cancel_date_input].sort()
         : form.appointment_cancelled_dates
 
-    if (cancelDates.length === 0)
-      return setError('At least one appointment-cancelled date is required')
+    // Cancelled dates are OPTIONAL — an entry can be saved with none. The
+    // backend already accepts an empty array (DATE[] DEFAULT '{}') and the
+    // practitioner-stats query falls back to date_logged when the array is
+    // empty, so nothing downstream needs a date here.
 
     // The values that will actually be stored — the duplicate diff and any
     // edit-request patch are both computed from these.
@@ -888,7 +896,7 @@ export default function DropoutEntryPage() {
                 style={inputStyle} />
             </Field>
 
-            <Field label="Appointment cancelled dates" full>
+            <Field label="Appointment cancelled dates (optional)" full>
               <CancelledDatesPicker
                 dates={form.appointment_cancelled_dates}
                 input={form.cancel_date_input}
@@ -1017,12 +1025,17 @@ export default function DropoutEntryPage() {
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>Date range</span>
-            <DateRangePicker
-              value={{ from: dateFrom, to: dateTo }}
-              onChange={r => { setDateFrom(r.from); setDateTo(r.to) }}
-              maxRangeDays={366}
-            />
+            <span style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 500 }}>
+              Date range
+              {searching && <span style={{ color: TEAL, fontWeight: 600 }}> · ignored while searching</span>}
+            </span>
+            <div style={{ opacity: searching ? 0.5 : 1 }}>
+              <DateRangePicker
+                value={{ from: dateFrom, to: dateTo }}
+                onChange={r => { setDateFrom(r.from); setDateTo(r.to) }}
+                maxRangeDays={366}
+              />
+            </div>
           </div>
           {isFrontDeskGlobal && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

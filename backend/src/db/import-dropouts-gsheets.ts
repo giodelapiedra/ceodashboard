@@ -41,7 +41,14 @@ const CLINIC_CONFIGS: Record<string, ClinicConfig> = {
     // Patient Lead Conversion Tracker" tab is now first), so 'A:I' would read
     // the wrong tab. The dropout data lives in "Daily Patient Dropout Tracking".
     sheetTab:         "'Daily Patient Dropout Tracking'!A:I",
-    clinicianAliases: {},
+    // The sheet writes "Gabby"; her real account is Gabriella
+    // (gabriella@physioward.com.au, id 7). A duplicate "Gabby" account
+    // (gabby-newport@, id 28) had been auto-provisioned by the old
+    // auto-create behaviour and collected 396 dropouts; those were merged
+    // into id 7 on 2026-08-06 and id 28 was retired. Without this alias the
+    // clinician lookup — which does NOT filter on is_active — resolves
+    // "Gabby" straight back to the retired id 28 and undoes the merge.
+    clinicianAliases: { Gabby: 'Gabriella' },
     clinicianSkips:   ['Other - Physio'],
     reasonAliases:    { 'Physio Discharged': 'Discharged' },
     frontStaffAliases:{ 'Front of staff name': null },
@@ -591,17 +598,23 @@ export async function run(): Promise<void> {
   if (!clear && valid.length > 0) {
     const minDate = valid.reduce((m, v) => v.date_logged < m ? v.date_logged : m, valid[0].date_logged);
     const maxDate = valid.reduce((m, v) => v.date_logged > m ? v.date_logged : m, valid[0].date_logged);
-    const { rows: existing } = await query<{ n: string }>(
-      `SELECT COUNT(*)::bigint AS n
+    // Split the overlap by provenance so the operator can see exactly what
+    // --clear would and would not remove. (The clinic was hardcoded as
+    // "newport" in this message until 2026-08-06 — it lied for other clinics.)
+    const { rows: existing } = await query<{ imported: string; manual: string }>(
+      `SELECT COUNT(*) FILTER (WHERE entered_by =  $4)::bigint AS imported,
+              COUNT(*) FILTER (WHERE entered_by <> $4)::bigint AS manual
          FROM patient_dropouts
         WHERE clinic_id  = $1
           AND date_logged BETWEEN $2 AND $3`,
-      [CLINIC, minDate, maxDate]
+      [CLINIC, minDate, maxDate, admin.id]
     );
-    const n = Number(existing[0]?.n ?? 0);
-    if (n > 0) {
-      console.log(`\n[gsheets] WARNING: ${n} existing newport rows overlap ${minDate}..${maxDate}.`);
-      console.log('[gsheets]           Re-run with --clear --commit to delete all rows first.');
+    const imported = Number(existing[0]?.imported ?? 0);
+    const manual   = Number(existing[0]?.manual   ?? 0);
+    if (imported + manual > 0) {
+      console.log(`\n[gsheets] WARNING: ${imported + manual} existing ${CLINIC} rows overlap ${minDate}..${maxDate}.`);
+      console.log(`[gsheets]           ${imported} previously imported — --clear --commit replaces these.`);
+      console.log(`[gsheets]           ${manual} hand-encoded in the app — these are KEPT.`);
     }
   }
 
@@ -613,10 +626,27 @@ export async function run(): Promise<void> {
   // ── Commit ─────────────────────────────────────────────────────────────────
   await withTransaction(async (client) => {
     if (clear) {
+      // Only wipe what a PREVIOUS RUN OF THIS IMPORTER wrote — every insert
+      // below stamps entered_by = the CEO account, so that column is the only
+      // marker of provenance we have. Staff who encode straight into the app
+      // (Bella, team@, …) get their own entered_by, and a clinic-wide
+      // `DELETE ... WHERE clinic_id = $1` used to take those with it: on
+      // 2026-08-06 that would have silently destroyed 82 hand-typed Brookvale
+      // rows (51 dropouts, 22 case-acceptance, 9 ad-leads) that are NOT in the
+      // sheet and would never have come back.
+      // CAVEAT: a row the CEO account itself encoded by hand in the app is
+      // indistinguishable from an imported one and is still cleared.
       const del = await client.query(
-        `DELETE FROM patient_dropouts WHERE clinic_id = $1`, [CLINIC]
+        `DELETE FROM patient_dropouts WHERE clinic_id = $1 AND entered_by = $2`,
+        [CLINIC, admin.id]
       );
-      console.log(`\n[gsheets] cleared ${del.rowCount} existing ${CLINIC} rows`);
+      const kept = await client.query<{ n: string }>(
+        `SELECT COUNT(*)::bigint AS n FROM patient_dropouts
+          WHERE clinic_id = $1 AND entered_by <> $2`,
+        [CLINIC, admin.id]
+      );
+      console.log(`\n[gsheets] cleared ${del.rowCount} previously-imported ${CLINIC} rows`);
+      console.log(`[gsheets] preserved ${kept.rows[0]?.n ?? 0} manually-encoded ${CLINIC} rows`);
     }
 
     for (const v of valid) {

@@ -215,10 +215,12 @@ export default function AdLeadsEntryPage() {
     const seq = ++loadSeq.current
     setLoading(true); setListErr('')
     try {
+      // A name search spans all dates — see the note in DropoutEntryPage.
+      const searching = search.length > 0
       const common = {
         search:    search   || undefined,
-        date_from: dateFrom || undefined,
-        date_to:   dateTo   || undefined,
+        date_from: searching ? undefined : (dateFrom || undefined),
+        date_to:   searching ? undefined : (dateTo   || undefined),
         platform:  platformFilter || undefined,
         booked:    bookedFilter === '' ? undefined : bookedFilter === 'true',
       }

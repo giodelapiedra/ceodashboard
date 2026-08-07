@@ -59,13 +59,26 @@ export interface DateRange {
   dateTo:   string; // YYYY-MM-DD
 }
 
+/**
+ * Dashboard columns: Weeks 1-4 + 'remainder' in most months, or Weeks 1-5 in
+ * July. See getDashboardRanges in week.calculator.ts.
+ */
+export type WeekNum = number | 'remainder';
+
+/**
+ * The columns the CEO Google Sheet itself has: 4 Monday-anchored weeks plus a
+ * Remainder. Narrower than WeekNum on purpose — practitioner_week_inputs.week_num
+ * stores 1-5 and must never receive a dashboard-style week 6.
+ */
+export type SheetWeekNum = 1 | 2 | 3 | 4 | 'remainder';
+
 export interface WeekRange extends DateRange {
   label: string; // e.g. "Week 1 [6-10]"
-  weekNum: 1 | 2 | 3 | 4 | 'remainder';
+  weekNum: WeekNum;
 }
 
 export interface WeekMetrics {
-  weekNum: 1 | 2 | 3 | 4 | 'remainder';
+  weekNum: WeekNum;
   label: string;
   dateFrom: string;
   dateTo: string;

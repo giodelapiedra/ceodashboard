@@ -4,7 +4,7 @@ import { upfrontRevenueService } from './upfront-revenue.service';
 import { patientMetricsService } from './patient-metrics.service';
 import { NookalDataCache } from './nookal-v3/data-cache';
 import { calculateMonthlyTotals } from './kpi.calculator';
-import { getWeekRanges, getMonthRange } from './week.calculator';
+import { getDashboardRanges, getMonthRange } from './week.calculator';
 import { snapshotRepository } from '../repositories/snapshot.repository';
 import { dropoutRepository } from '../features/dropouts/dropout.repository';
 import { caseAcceptanceRepository } from '../features/case-acceptance/case-acceptance.repository';
@@ -187,6 +187,19 @@ async function overlayLiveMetrics(
   return { ...payload, weeks, monthly };
 }
 
+/** True when a cached snapshot's columns are exactly the current week grid. */
+function gridMatches(
+  weeks: WeekMetrics[] | undefined,
+  year:  number,
+  month: number
+): boolean {
+  const grid = getDashboardRanges(year, month);
+  if (!weeks || weeks.length !== grid.length) return false;
+  return grid.every((g, i) =>
+    weeks[i]?.dateFrom === g.dateFrom && weeks[i]?.dateTo === g.dateTo
+  );
+}
+
 export const dashboardService = {
   async getMonthly(
     clinic:       Clinic,
@@ -198,7 +211,11 @@ export const dashboardService = {
 
     if (!forceRefresh) {
       const cached = await snapshotRepository.find(clinic.id, year, month);
-      if (cached && isFresh(cached.fetched_at)) {
+      // A snapshot written under an older week grid has different column dates,
+      // so its numbers no longer add up to the Monthly Actual. Compare against
+      // the current grid and refetch on any mismatch — that makes every future
+      // grid change self-healing instead of needing a manual cache purge.
+      if (cached && gridMatches(cached.payload.weeks, year, month) && isFresh(cached.fetched_at)) {
         // Dropout + case-acceptance entries are logged daily — re-overlay
         // on every cache hit so the dashboard reflects newly-logged rows
         // without forcing a full Nookal refetch.
@@ -242,10 +259,14 @@ export const dashboardService = {
       CLINICS.map((c) => this.getMonthly(c, year, month, forceRefresh))
     );
 
-    const weekCount = Math.max(...results.map((r) => r.weeks.length));
+    // Group by weekNum, not by array position. A cached snapshot written
+    // written under an older grid can have a different column count, and
+    // index-based pairing would then add clinic A's Week 1 to clinic B's Week 2.
     const weeks: WeekMetrics[] = [];
-    for (let i = 0; i < weekCount; i++) {
-      const parts = results.map((r) => r.weeks[i]).filter(Boolean) as WeekMetrics[];
+    for (const range of getDashboardRanges(year, month)) {
+      const parts = results
+        .map((r) => r.weeks.find((w) => w.weekNum === range.weekNum))
+        .filter(Boolean) as WeekMetrics[];
       if (parts.length) weeks.push(sumWeeks(parts));
     }
 
@@ -369,7 +390,7 @@ async function fetchFromNookal(
   year:   number,
   month:  number
 ): Promise<MonthlyDashboard> {
-  const weekRanges = getWeekRanges(year, month);
+  const weekRanges = getDashboardRanges(year, month);
   const monthRange = getMonthRange(year, month);
 
   console.log(`[dashboard] v3: fetching ${clinic.name} ${month}/${year}`);

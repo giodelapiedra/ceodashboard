@@ -227,8 +227,21 @@ export async function run(): Promise<void> {
 
   await withTransaction(async (client) => {
     if (clear) {
-      const del = await client.query(`DELETE FROM ad_leads WHERE clinic_id = $1`, [CLINIC]);
-      console.log(`\n[ad-leads] cleared ${del.rowCount} existing ${CLINIC} rows`);
+      // Scoped to this importer's own rows — see the long note in
+      // import-dropouts-gsheets.ts. Bella encodes ad-leads directly in the
+      // app (9 Brookvale rows as of 2026-08-06); a clinic-wide delete would
+      // wipe them and they are not in the sheet to be re-created.
+      const del = await client.query(
+        `DELETE FROM ad_leads WHERE clinic_id = $1 AND entered_by = $2`,
+        [CLINIC, admin.id]
+      );
+      const kept = await client.query<{ n: string }>(
+        `SELECT COUNT(*)::bigint AS n FROM ad_leads
+          WHERE clinic_id = $1 AND entered_by <> $2`,
+        [CLINIC, admin.id]
+      );
+      console.log(`\n[ad-leads] cleared ${del.rowCount} previously-imported ${CLINIC} rows`);
+      console.log(`[ad-leads] preserved ${kept.rows[0]?.n ?? 0} manually-encoded ${CLINIC} rows`);
     }
     for (const v of valid) {
       await client.query(

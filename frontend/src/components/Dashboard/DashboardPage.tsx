@@ -54,10 +54,13 @@ const CLINIC_LIST = [
 
 // ── Sub-components ────────────────────────────────────────────
 
-function SectionHeader({ label }: { label: string }) {
+// Metrics + Definition + one per week column + Metric Type + Monthly Actual +
+// Monthly Goal. Week count comes from the payload (5 or 6, depending on how many
+// Mon-Sun blocks the month touches), so the span can't be a constant.
+function SectionHeader({ label, weekCols }: { label: string; weekCols: number }) {
   return (
     <tr>
-      <td colSpan={10} style={{
+      <td colSpan={5 + weekCols} style={{
         background: NAVY, color: '#fff', fontWeight: 600, fontSize: 11,
         letterSpacing: '0.08em', padding: '9px 16px', textTransform: 'uppercase',
       }}>
@@ -70,11 +73,12 @@ function SectionHeader({ label }: { label: string }) {
 type CellVal = string
 
 function DataRow({
-  label, definition, wk1, wk2, wk3, wk4, rem,
+  label, definition, cells,
   metricType, monthly, monthlyGoal, highlight, alt,
 }: {
   label: string; definition: string
-  wk1: CellVal; wk2: CellVal; wk3: CellVal; wk4: CellVal; rem: CellVal
+  /** One value per week column, in API order (Week 1 → last week of month). */
+  cells: CellVal[]
   metricType: string; monthly: CellVal; monthlyGoal?: CellVal
   highlight?: boolean; alt?: boolean
 }) {
@@ -105,11 +109,7 @@ function DataRow({
         borderBottom: `1px solid ${BORDER}`, background: rowBg,
         minWidth: 260, lineHeight: 1.4,
       }}>{definition}</td>
-      <td style={numericCell(wk1)}>{wk1}</td>
-      <td style={numericCell(wk2)}>{wk2}</td>
-      <td style={numericCell(wk3)}>{wk3}</td>
-      <td style={numericCell(wk4)}>{wk4}</td>
-      <td style={numericCell(rem)}>{rem}</td>
+      {cells.map((c, i) => <td key={i} style={numericCell(c)}>{c}</td>)}
       <td style={{
         padding: '9px 10px', fontSize: 10, fontWeight: 500,
         textAlign: 'center', color: TEXT_MUTED,
@@ -141,17 +141,20 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
   const nextAlt = () => (rowIdx++ % 2 === 1)
   const resetAlt = () => { rowIdx = 0 }
 
+  // One cell per week column the API returned. The month has 5 or 6 weeks, so
+  // the count is driven by the payload and never hardcoded.
+  const weekCells = (
+    key: keyof WeekMetrics,
+    fmt: (v: number | null) => CellVal
+  ): CellVal[] => w.map((_, i) => fmt(wv(i, key) as number | null))
+
   const crow = (
     label: string, def: string, key: keyof WeekMetrics,
     mKey: keyof MonthlyTotals, highlight = false
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={fmtCurrencyCell(wv(0, key) as number | null)}
-      wk2={fmtCurrencyCell(wv(1, key) as number | null)}
-      wk3={fmtCurrencyCell(wv(2, key) as number | null)}
-      wk4={fmtCurrencyCell(wv(3, key) as number | null)}
-      rem={fmtCurrencyCell(wv(4, key) as number | null)}
+      cells={weekCells(key, fmtCurrencyCell)}
       metricType="Total"
       monthly={fmtCurrencyCell(m[mKey] as number)}
       highlight={highlight}
@@ -165,11 +168,7 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={fmtIntCell(wv(0, key) as number | null)}
-      wk2={fmtIntCell(wv(1, key) as number | null)}
-      wk3={fmtIntCell(wv(2, key) as number | null)}
-      wk4={fmtIntCell(wv(3, key) as number | null)}
-      rem={fmtIntCell(wv(4, key) as number | null)}
+      cells={weekCells(key, fmtIntCell)}
       metricType={metricType}
       monthly={fmtIntCell(m[mKey] as number)}
       highlight={highlight}
@@ -183,11 +182,7 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
   ) => (
     <DataRow
       label={label} definition={def}
-      wk1={fmtPctCell(wv(0, key) as number | null)}
-      wk2={fmtPctCell(wv(1, key) as number | null)}
-      wk3={fmtPctCell(wv(2, key) as number | null)}
-      wk4={fmtPctCell(wv(3, key) as number | null)}
-      rem={fmtPctCell(wv(4, key) as number | null)}
+      cells={weekCells(key, fmtPctCell)}
       metricType="Avg"
       monthly={fmtPctCell(m[mKey] as number | null)}
       highlight={highlight}
@@ -198,7 +193,7 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
   const emptyRow = (label: string, def: string, metricType = 'Total', monthly = NO_DATA) => (
     <DataRow
       label={label} definition={def}
-      wk1={NO_DATA} wk2={NO_DATA} wk3={NO_DATA} wk4={NO_DATA} rem={NO_DATA}
+      cells={w.map(() => NO_DATA)}
       metricType={metricType} monthly={monthly}
       alt={nextAlt()}
     />
@@ -243,8 +238,8 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
             }}>
               Definition
             </th>
-            {[0, 1, 2, 3, 4].map(i => {
-              const label = data.weeks[i]?.label ?? ''
+            {w.map((week, i) => {
+              const label = week.label ?? ''
               const parsed = label.match(/^(.+?)\s*(\[[^\]]*\])?$/)
               const title    = parsed?.[1] ?? label
               const subtitle = parsed?.[2] ?? ''
@@ -258,7 +253,7 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
         <tbody>
 
           {/* ── FINANCES ── */}
-          <SectionHeader label="Finances $$$" />
+          <SectionHeader label="Finances $$$" weekCols={w.length} />
           {(resetAlt(), null)}
           {crow('Total Revenue',
             'Total revenue collected in last 7 days',
@@ -281,18 +276,14 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
                 ? 'Fetching outstanding balances from Nookal… this may take a minute.'
                 : `Total outstanding invoice balances (last 10 years). Current snapshot from Nookal.${ageingDebts ? ` Last updated: ${new Date(ageingDebts.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : ''}`
             }
-            wk1={NO_DATA}
-            wk2={NO_DATA}
-            wk3={NO_DATA}
-            wk4={NO_DATA}
-            rem={NO_DATA}
+            cells={w.map(() => NO_DATA)}
             metricType="Total"
             monthly={ageingDebts ? fmtCurrency(ageingDebts.total) : ageingLoading ? 'Fetching…' : NO_DATA}
             alt={nextAlt()}
           />
 
           {/* ── MARKETING ── */}
-          <SectionHeader label="Marketing" />
+          <SectionHeader label="Marketing" weekCols={w.length} />
           {(resetAlt(), null)}
           {emptyRow('New Opt Ins To The List',
             'Total number of new opt ins to our email list in last 7 days')}
@@ -310,7 +301,7 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
             'costPerPatient', 'costPerPatient')}
 
           {/* ── SALES ── */}
-          <SectionHeader label="Sales (Service & Product Delivery)" />
+          <SectionHeader label="Sales (Service & Product Delivery)" weekCols={w.length} />
           {(resetAlt(), null)}
           {nrow('Total Number of Patients For The Week',
             'Total number of patients in the calendar for the last 7 days',

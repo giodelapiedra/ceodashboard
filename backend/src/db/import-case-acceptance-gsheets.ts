@@ -457,8 +457,20 @@ export async function run(): Promise<void> {
 
   await withTransaction(async (client) => {
     if (clear) {
-      const del = await client.query(`DELETE FROM case_acceptances WHERE clinic_id=$1`, [CLINIC]);
-      console.log(`\n[ca-gsheets] cleared ${del.rowCount} existing ${CLINIC} rows`);
+      // Scoped to this importer's own rows — see the long note in
+      // import-dropouts-gsheets.ts. A clinic-wide delete would take staff's
+      // hand-typed app entries (22 Brookvale rows as of 2026-08-06) with it.
+      const del = await client.query(
+        `DELETE FROM case_acceptances WHERE clinic_id = $1 AND entered_by = $2`,
+        [CLINIC, admin.id]
+      );
+      const kept = await client.query<{ n: string }>(
+        `SELECT COUNT(*)::bigint AS n FROM case_acceptances
+          WHERE clinic_id = $1 AND entered_by <> $2`,
+        [CLINIC, admin.id]
+      );
+      console.log(`\n[ca-gsheets] cleared ${del.rowCount} previously-imported ${CLINIC} rows`);
+      console.log(`[ca-gsheets] preserved ${kept.rows[0]?.n ?? 0} manually-encoded ${CLINIC} rows`);
     }
     for (const v of valid) {
       await client.query(

@@ -179,9 +179,23 @@ export const practitionerStatsRepository = {
     dateTo:   string,
     clinicId: string | null
   ): Promise<CancellationDayRow[]> {
-    // An entry with no recorded cancelled dates falls back to date_logged, so a
-    // sparsely-filled row still registers as one event rather than vanishing.
-    const EFFECTIVE_DATES = `
+    // EVENTS count real cancelled appointments only — no fallback. An entry
+    // saved with an empty array had nothing cancelled (the entry form no longer
+    // requires a date; 'Completed Treatment Plan' is the case that motivated
+    // it), so unnest() yields no rows and it contributes no cancellation event.
+    //
+    // Both GSheets importers substitute date_logged when the source sheet had
+    // no dates, so imported history is unaffected. Rows keyed before migration
+    // 009 with a blank appointment_cancelled_date DID become an empty array,
+    // and those stop counting here — see the count in docs before assuming the
+    // historical cancellation totals are unchanged.
+    const EVENT_DATES = 'd.appointment_cancelled_dates';
+
+    // CHURNS still fall back. A churn is a property of the patient — no future
+    // booking left — which holds whether or not an appointment was cancelled,
+    // so a dateless entry is bucketed on the day it was logged rather than
+    // vanishing from the churn count.
+    const CHURN_DATES = `
       CASE WHEN cardinality(d.appointment_cancelled_dates) > 0
            THEN d.appointment_cancelled_dates
            ELSE ARRAY[d.date_logged] END
@@ -191,7 +205,7 @@ export const practitionerStatsRepository = {
       query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
         `SELECT d.clinician_id, d.clinic_id, cd::date AS day, COUNT(*)::bigint AS n
            FROM patient_dropouts d
-           CROSS JOIN LATERAL unnest(${EFFECTIVE_DATES}) AS cd
+           CROSS JOIN LATERAL unnest(${EVENT_DATES}) AS cd
           WHERE cd >= $1::date
             AND cd <= $2::date
             AND ($3::text IS NULL OR d.clinic_id = $3)
@@ -202,7 +216,7 @@ export const practitionerStatsRepository = {
         `SELECT d.clinician_id, d.clinic_id, last_cd::date AS day, COUNT(*)::bigint AS n
            FROM patient_dropouts d
            CROSS JOIN LATERAL (
-             SELECT MAX(cd) AS last_cd FROM unnest(${EFFECTIVE_DATES}) AS cd
+             SELECT MAX(cd) AS last_cd FROM unnest(${CHURN_DATES}) AS cd
            ) AS agg
           WHERE d.status = ANY($4::text[])
             AND agg.last_cd >= $1::date

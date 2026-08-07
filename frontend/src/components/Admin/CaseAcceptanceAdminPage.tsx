@@ -57,10 +57,13 @@ export default function CaseAcceptanceAdminPage() {
 
   useEffect(() => { resetPage() }, [tab, dateFrom, dateTo, tpFilter, search, clinicianFilter, resetPage])
 
+  // A name search spans all history — see the note in CaseAcceptanceEntryPage.
+  const searching = search.length > 0
+
   const filterParams = {
     clinic_id:    tab === 'overall' ? undefined : tab,
-    date_from:    dateFrom || undefined,
-    date_to:      dateTo   || undefined,
+    date_from:    searching ? undefined : (dateFrom || undefined),
+    date_to:      searching ? undefined : (dateTo   || undefined),
     tp_provided:  tpFilter === '' ? undefined : tpFilter === 'Y',
     search:       search   || undefined,
     clinician_id: clinicianFilter || undefined,

@@ -37,12 +37,16 @@ export interface CreateDropoutResult {
 
 /**
  * Who may overwrite an existing dropout in place. Intentionally identical to
- * the rule in update(): ADMIN edits anything, everyone else only their own
- * entries. When this is false the UI offers the edit-request flow instead —
- * the duplicate guard must not become a way around the approval rules.
+ * the rule in update(): ADMIN only. When this is false the UI offers the
+ * edit-request flow instead — the duplicate guard must not become a way
+ * around the approval rules.
+ *
+ * Tightened with update() on 2026-08-06: while owners could still overwrite
+ * their own row here, re-submitting a duplicate entry would have written
+ * straight to the DB and bypassed the approval this file now enforces.
  */
-function canOverwriteDropout(scope: RequestScope, existing: DropoutDTO): boolean {
-  return scope.role === 'ADMIN' || existing.entered_by === scope.userId;
+function canOverwriteDropout(scope: RequestScope): boolean {
+  return scope.role === 'ADMIN';
 }
 
 /**
@@ -117,7 +121,7 @@ export const dropoutService = {
     return {
       exact,
       similar,
-      can_overwrite: exact ? canOverwriteDropout(scope, exact) : false,
+      can_overwrite: exact ? canOverwriteDropout(scope) : false,
     };
   },
 
@@ -177,7 +181,7 @@ export const dropoutService = {
 
       // 'allow' = the user saw the diff and confirmed it is a separate entry.
       if (exact && onDuplicate !== 'allow') {
-        const canOverwrite = canOverwriteDropout(scope, exact);
+        const canOverwrite = canOverwriteDropout(scope);
 
         if (onDuplicate === 'reject') {
           throw duplicateConflict<DropoutDTO>('dropout entry', {
@@ -227,13 +231,18 @@ export const dropoutService = {
     const existing = await dropoutRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Dropout ${id} not found`);
 
-    // ADMIN can edit any entry. Clinician / front-desk can edit their OWN
-    // entries at any time (no 24h window) — they may need to correct data
-    // days later. Every change is captured in audit_log.
+    // Non-admin users must go through the edit-request approval flow.
+    // ADMIN edits entries directly. Identical to case acceptance.
+    //
+    // Until 2026-08-06 owners could PATCH their own dropouts directly while
+    // case acceptance forced approval for the very same situation (finding #6
+    // of the 2026-07-08 review). Sam chose to align on the stricter rule. The
+    // entry UI already routed non-admins through edit requests, so this closes
+    // the API-level hole rather than changing what staff see.
     if (scope.role !== 'ADMIN') {
-      if (existing.entered_by !== scope.userId) {
-        throw Errors.forbidden('You can only edit your own dropout entries');
-      }
+      throw Errors.forbidden(
+        'Your edits need admin approval — submit an edit request (POST /api/edit-requests) instead'
+      );
     }
 
     if (patch.clinician_id) {
@@ -248,21 +257,16 @@ export const dropoutService = {
       }
     }
 
-    // Receptionist accounts have a fixed front_staff_name (their own login).
-    // Strip any client-provided value before persisting.
-    const isReceptionist =
-      scope.role === 'FRONT_DESK' || scope.role === 'FRONT_DESK_GLOBAL';
-    const safePatch = isReceptionist
-      ? { ...patch, front_staff_name: undefined }
-      : patch;
+    // No receptionist front_staff_name stripping here any more: only ADMIN
+    // reaches this line, and a receptionist's correction now arrives through
+    // the edit-request approval flow (which applies the patch via the
+    // repository). Matches case acceptance, which never had the strip either.
+    await dropoutRepository.update(id, patch, scope.userId);
 
-    await dropoutRepository.update(id, safePatch, scope.userId);
-
-    // Re-read for the response. A CLINICIAN's list scope filters on
-    // clinician_id — if they just reassigned the entry to another clinician,
-    // the scoped read comes back empty even though the update committed.
-    // Fall back to an unscoped read (ownership was already verified above)
-    // so the caller gets the updated row instead of a bogus 404.
+    // Re-read for the response. Kept as a scoped read with an unscoped
+    // fallback: the caller is always ADMIN now (so the fallback is normally
+    // redundant), but it costs nothing and keeps the method correct if the
+    // policy above is ever relaxed for scoped roles again.
     const updated =
       (await dropoutRepository.findById(scope, id)) ??
       (await dropoutRepository.findById(

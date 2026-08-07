@@ -27,27 +27,22 @@ import PatientNameInput from '../shared/PatientNameInput'
 import Pagination from '../shared/Pagination'
 import DraftsPanel from '../shared/DraftsPanel'
 import DraftBlockerModal from '../shared/DraftBlockerModal'
-import DateRangePicker, { DateRangeValue } from '../shared/DateRangePicker'
+import DateRangePicker, { DateRangeValue, currentWeekRange } from '../shared/DateRangePicker'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { usePaginationParams } from '../../hooks/usePaginationParams'
 
-// Default filter — last 30 days, persisted to localStorage so the user's
-// last pick survives reload.
-const FILTER_STORAGE_KEY = 'pw:case-acceptance:filter'
+/**
+ * Default filter — the CURRENT Mon–Sun week, same week the CEO dashboard's
+ * Week columns use. Recomputed on every visit on purpose.
+ *
+ * This range used to be persisted to localStorage, which froze `to` at
+ * whatever day the user last touched the filter: entries logged after that day
+ * saved fine but never appeared in the table, so they looked lost (and a
+ * re-encode then hit the duplicate guard — seen 2026-08-05). A sticky filter
+ * is not worth a default that silently hides today's work.
+ */
 function defaultDateRange(): DateRangeValue {
-  const to   = new Date()
-  const from = new Date(); from.setDate(from.getDate() - 29)
-  const iso  = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-  return { from: iso(from), to: iso(to) }
-}
-function loadPersistedRange(): DateRangeValue {
-  try {
-    const raw = localStorage.getItem(FILTER_STORAGE_KEY)
-    if (!raw) return defaultDateRange()
-    const parsed = JSON.parse(raw)
-    if (typeof parsed?.from === 'string' && typeof parsed?.to === 'string') return parsed
-  } catch { /* fall through */ }
-  return defaultDateRange()
+  return currentWeekRange()
 }
 
 const TEAL      = '#0f6e56'
@@ -205,6 +200,10 @@ export default function CaseAcceptanceEntryPage() {
   // CLINICIAN + FRONT_DESK_GLOBAL pick the entry's clinic per-entry. ADMIN
   // can only edit; the clinic pre-loads from the row.
   const picksClinic       = isClinician || isFrontDeskGlobal || user.role === 'ADMIN'
+  // Only the cross-clinic roles get the Clinic filter — FRONT_DESK is pinned to
+  // its own clinic and CLINICIAN sees their own entries wherever they worked,
+  // and for both the server ignores a clinic_id filter anyway.
+  const canFilterClinic   = isFrontDeskGlobal || user.role === 'ADMIN'
 
   const [rows,    setRows]    = useState<CaseAcceptanceDTO[]>([])
   const [total,   setTotal]   = useState(0)
@@ -216,24 +215,29 @@ export default function CaseAcceptanceEntryPage() {
   const [searchInput, setSearchInput] = useState('')
   const search = useDebouncedValue(searchInput.trim(), 300)
 
-  const [dateRange, setDateRange] = useState<DateRangeValue>(() => loadPersistedRange())
-  useEffect(() => {
-    try { localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(dateRange)) } catch { /* quota or private mode — ignore */ }
-  }, [dateRange])
+  const [dateRange, setDateRange] = useState<DateRangeValue>(() => defaultDateRange())
 
   const [summary, setSummary] = useState<CaseAcceptanceSummary | null>(null)
   const [exporting, setExporting] = useState(false)
   const [clinicianFilter, setClinicianFilter] = useState('')
+  const [clinicFilter, setClinicFilter] = useState<ClinicId | ''>('')
 
-  useEffect(() => { resetPage() }, [search, dateRange, clinicianFilter, resetPage])
+  useEffect(() => { resetPage() }, [search, dateRange, clinicianFilter, clinicFilter, resetPage])
+
+  // Searching by name looks across ALL history — the date window is dropped
+  // while a search is active. Looking a patient up by name means you don't
+  // know when they were logged, so the visible window is the wrong constraint
+  // (an entry saved today vanished behind a range someone left on last month).
+  const searching = search.length > 0
 
   // Filter object reused across list / summary / export — keeps the table,
   // cards, and downloaded file always agreeing.
   const filter = useMemo(() => ({
-    date_from:    dateRange.from,
-    date_to:      dateRange.to,
+    date_from:    searching ? undefined : dateRange.from,
+    date_to:      searching ? undefined : dateRange.to,
     clinician_id: clinicianFilter || undefined,
-  }), [dateRange, clinicianFilter])
+    clinic_id:    clinicFilter || undefined,
+  }), [dateRange, clinicianFilter, clinicFilter, searching])
 
   const [clinicians, setClinicians] = useState<User[]>([])
 
@@ -750,6 +754,16 @@ export default function CaseAcceptanceEntryPage() {
       if (!editingId && draftId) {
         try { await draftsApi.remove(draftId) } catch { /* best-effort cleanup */ }
       }
+      // A back-dated entry lands outside the default one-week window, so it
+      // would save and then be invisible. Stretch the range to cover it rather
+      // than let the user think the save was lost.
+      const saved = form.date_logged
+      if (saved && (saved < dateRange.from || saved > dateRange.to)) {
+        setDateRange({
+          from: saved < dateRange.from ? saved : dateRange.from,
+          to:   saved > dateRange.to   ? saved : dateRange.to,
+        })
+      }
       cancelEdit()
       await load()
       await reloadDrafts()
@@ -1073,15 +1087,32 @@ export default function CaseAcceptanceEntryPage() {
             <div style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>
               {user.role === 'CLINICIAN'
                 ? 'My entries'
-                : isFrontDeskGlobal
-                  ? 'Entries — All clinics'
+                : canFilterClinic
+                  ? `Entries — ${clinicFilter ? CLINIC_LABEL[clinicFilter] : 'All clinics'}`
                   : `Entries — ${user.clinic_id ? CLINIC_LABEL[user.clinic_id as ClinicId] : ''}`}
               <span style={{ color: TEXT_SOFT, fontWeight: 400, marginLeft: 8 }}>
-                ({total.toLocaleString()}{search ? ` matching "${search}"` : ''})
+                ({total.toLocaleString()}{search ? ` matching "${search}" — all dates` : ''})
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <DateRangePicker value={dateRange} onChange={setDateRange} />
+              <div
+                style={{ opacity: searching ? 0.5 : 1 }}
+                title={searching ? 'Date range is ignored while searching' : undefined}
+              >
+                <DateRangePicker value={dateRange} onChange={setDateRange} />
+              </div>
+              {canFilterClinic && (
+                <select
+                  value={clinicFilter}
+                  onChange={e => setClinicFilter(e.target.value as ClinicId | '')}
+                  style={{ ...inputStyle, width: 'auto', minWidth: 140, fontSize: 12, padding: '7px 10px' }}
+                >
+                  <option value="">All Clinics</option>
+                  {CLINIC_OPTIONS.map(c => (
+                    <option key={c} value={c}>{CLINIC_LABEL[c]}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={clinicianFilter}
                 onChange={e => setClinicianFilter(e.target.value)}
@@ -1143,7 +1174,7 @@ export default function CaseAcceptanceEntryPage() {
                 <thead>
                   <tr style={{ background: '#f9fafb' }}>
                     <Th>Date</Th>
-                    {isFrontDeskGlobal && <Th>Clinic</Th>}
+                    {canFilterClinic && <Th>Clinic</Th>}
                     <Th>Front of staff</Th>
                     <Th>Clinician</Th>
                     <Th>Patient</Th>
@@ -1162,7 +1193,7 @@ export default function CaseAcceptanceEntryPage() {
                   {rows.map(r => (
                     <tr key={r.id} style={{ borderTop: `1px solid ${BORDER}` }}>
                       <Td>{r.date_logged}</Td>
-                      {isFrontDeskGlobal && <Td>{CLINIC_LABEL[r.clinic_id]}</Td>}
+                      {canFilterClinic && <Td>{CLINIC_LABEL[r.clinic_id]}</Td>}
                       <Td>{r.front_staff_name || <Dim>—</Dim>}</Td>
                       <Td>{r.clinician_name || <Dim>—</Dim>}</Td>
                       <Td><strong>{r.patient_name}</strong></Td>

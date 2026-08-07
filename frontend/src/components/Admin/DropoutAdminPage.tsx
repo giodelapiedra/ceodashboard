@@ -2,8 +2,9 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { dropoutsApi, DropoutSummary } from '../../api/dropouts.api'
 import {
   DropoutDTO, ClinicId, CLINIC_LABEL,
-  DROPOUT_STATUSES, DROPOUT_REASONS, DropoutStatus, DropoutReason,
+  DROPOUT_STATUSES, DROPOUT_REASONS, DropoutStatus, DropoutReason, User,
 } from '../../types'
+import { usersApi } from '../../api/users.api'
 import AppShell from '../shared/AppShell'
 import Pagination from '../shared/Pagination'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
@@ -50,16 +51,26 @@ export default function DropoutAdminPage() {
 
   const { limit, offset, setOffset, setLimit, resetPage } = usePaginationParams()
   const [exporting, setExporting] = useState(false)
+  const [clinicians, setClinicians] = useState<User[]>([])
+  const [clinicianFilter, setClinicianFilter] = useState('')
 
-  useEffect(() => { resetPage() }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, resetPage])
+  useEffect(() => {
+    usersApi.staff('CLINICIAN').then(setClinicians).catch(() => {})
+  }, [])
+
+  useEffect(() => { resetPage() }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, clinicianFilter, resetPage])
+
+  // A name search spans all history — see the note in DropoutEntryPage.
+  const searching = search.length > 0
 
   const filterParams = {
-    clinic_id: tab === 'overall' ? undefined : tab,
-    date_from: dateFrom || undefined,
-    date_to:   dateTo   || undefined,
-    status:    statusFilter || undefined,
-    reason:    reasonFilter || undefined,
-    search:    search || undefined,
+    clinic_id:    tab === 'overall' ? undefined : tab,
+    date_from:    searching ? undefined : (dateFrom || undefined),
+    date_to:      searching ? undefined : (dateTo   || undefined),
+    status:       statusFilter || undefined,
+    reason:       reasonFilter || undefined,
+    search:       search || undefined,
+    clinician_id: clinicianFilter || undefined,
   }
 
   const load = useCallback(async () => {
@@ -72,7 +83,7 @@ export default function DropoutAdminPage() {
       setError(e.response?.data?.error?.message || 'Failed to load dropouts')
     } finally { setLoading(false) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, limit, offset])
+  }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, limit, offset, clinicianFilter])
 
   useEffect(() => { load() }, [load])
 
@@ -86,7 +97,7 @@ export default function DropoutAdminPage() {
       .catch(() => {})
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search])
+  }, [tab, dateFrom, dateTo, statusFilter, reasonFilter, search, clinicianFilter])
 
   const exportXlsx = async () => {
     setExporting(true)
@@ -175,6 +186,14 @@ export default function DropoutAdminPage() {
               onChange={(r) => { setDateFrom(r.from); setDateTo(r.to) }}
               maxRangeDays={366}
             />
+          </Field>
+          <Field label="Clinician">
+            <select value={clinicianFilter} onChange={e => setClinicianFilter(e.target.value)} style={inputStyle}>
+              <option value="">All Clinicians</option>
+              {clinicians.map(c => (
+                <option key={c.id} value={c.id}>{c.full_name}</option>
+              ))}
+            </select>
           </Field>
           <Field label="Status">
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as DropoutStatus | '')} style={inputStyle}>

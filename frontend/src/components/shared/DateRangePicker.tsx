@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { DayPicker, DateRange } from 'react-day-picker'
 import 'react-day-picker/style.css'
-import { format, parseISO, startOfDay, subDays, startOfMonth, endOfMonth, subMonths, isValid } from 'date-fns'
+import { format, parseISO, startOfDay, subDays, startOfMonth, endOfMonth, subMonths, startOfWeek, endOfWeek, isValid } from 'date-fns'
 
 const TEAL       = '#0f6e56'
 const TEAL_LIGHT = '#22a37e'
@@ -38,9 +38,23 @@ function isoStartOfDay(d: Date): string {
   return format(startOfDay(d), 'yyyy-MM-dd')
 }
 
+/**
+ * Mon–Sun week containing `d`. Same convention as the CEO dashboard's Week
+ * columns (services/week.calculator.ts) so "This week" here lines up with the
+ * week the CEO sheet is reading.
+ */
+export function currentWeekRange(d: Date = new Date()): DateRangeValue {
+  return {
+    from: isoStartOfDay(startOfWeek(d, { weekStartsOn: 1 })),
+    to:   isoStartOfDay(endOfWeek(d,   { weekStartsOn: 1 })),
+  }
+}
+
 const PRESETS: Preset[] = [
   { label: 'Today',       build: () => { const t = new Date(); return { from: isoStartOfDay(t), to: isoStartOfDay(t) } } },
   { label: 'Yesterday',   build: () => { const y = subDays(new Date(), 1); return { from: isoStartOfDay(y), to: isoStartOfDay(y) } } },
+  { label: 'This week',   build: () => currentWeekRange() },
+  { label: 'Last week',   build: () => currentWeekRange(subDays(new Date(), 7)) },
   { label: 'Last 7 days', build: () => ({ from: isoStartOfDay(subDays(new Date(), 6)), to: isoStartOfDay(new Date()) }) },
   { label: 'Last 30 days', build: () => ({ from: isoStartOfDay(subDays(new Date(), 29)), to: isoStartOfDay(new Date()) }) },
   { label: 'Last 90 days', build: () => ({ from: isoStartOfDay(subDays(new Date(), 89)), to: isoStartOfDay(new Date()) }) },
