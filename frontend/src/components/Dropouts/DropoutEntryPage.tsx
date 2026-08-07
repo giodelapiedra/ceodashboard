@@ -12,6 +12,17 @@ import {
 } from '../../types'
 
 const CLINIC_OPTIONS: ClinicId[] = ['newport', 'narrabeen', 'brookvale']
+
+/**
+ * The only two statuses that may be saved without a cancelled appointment date.
+ * Nothing was actually cancelled in either case — the patient either finished
+ * their plan or simply has nothing booked ahead — so there is no date to give.
+ * Every other status still requires at least one. (Sam, 2026-08-07.)
+ */
+const DATE_OPTIONAL_STATUSES: DropoutStatus[] = [
+  'No Future Bookings',
+  'Completed Treatment Plan',
+]
 import { useAuthStore } from '../../store/auth.store'
 import { useDraftResumeStore } from '../../store/draftResume.store'
 import { toast } from '../../store/toast.store'
@@ -517,10 +528,11 @@ export default function DropoutEntryPage() {
         ? [...form.appointment_cancelled_dates, form.cancel_date_input].sort()
         : form.appointment_cancelled_dates
 
-    // Cancelled dates are OPTIONAL — an entry can be saved with none. The
-    // backend already accepts an empty array (DATE[] DEFAULT '{}') and the
-    // practitioner-stats query falls back to date_logged when the array is
-    // empty, so nothing downstream needs a date here.
+    // Optional for the two statuses where nothing was cancelled; still required
+    // for the rest. The backend accepts an empty array either way, so this is
+    // the only thing enforcing it.
+    if (cancelDates.length === 0 && !DATE_OPTIONAL_STATUSES.includes(form.status as DropoutStatus))
+      return setError(`At least one appointment-cancelled date is required for "${form.status}"`)
 
     // The values that will actually be stored — the duplicate diff and any
     // edit-request patch are both computed from these.
@@ -902,7 +914,14 @@ export default function DropoutEntryPage() {
                 style={inputStyle} />
             </Field>
 
-            <Field label="Appointment cancelled dates (optional)" full>
+            <Field
+              label={
+                DATE_OPTIONAL_STATUSES.includes(form.status as DropoutStatus)
+                  ? 'Appointment cancelled dates (optional for this status)'
+                  : 'Appointment cancelled dates'
+              }
+              full
+            >
               <CancelledDatesPicker
                 dates={form.appointment_cancelled_dates}
                 input={form.cancel_date_input}
