@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 import { useAuthStore } from '../../store/auth.store'
+import logoSrc from '../../assets/physioward-logo.png'
+import ParticleField from './ParticleField'
 
 export default function LoginPage() {
   const [email, setEmail]       = useState('')
@@ -21,37 +23,48 @@ export default function LoginPage() {
 
   return (
     <div style={{
-      minHeight: '100vh', background: '#f0f2f5',
+      minHeight: '100vh', background: '#fdfdfd',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontFamily: "'DM Sans', sans-serif",
       padding: 16,
+      position: 'relative', overflow: 'hidden',
     }}>
+      <ParticleField />
+
       <style>{`
         @keyframes fadeUp { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+        @keyframes spin { to { transform: rotate(360deg) } }
         .login-card { animation: fadeUp 0.35s ease }
         .login-input:focus { outline: none; border-color: #0f6e56 !important; box-shadow: 0 0 0 3px rgba(15,110,86,0.12) }
         .login-btn:hover:not(:disabled) { background: #0a5040 !important }
         .login-btn:active:not(:disabled) { transform: scale(0.98) }
+        @media (prefers-reduced-motion: reduce) { .login-card { animation: none } }
       `}</style>
 
+      {/* zIndex lifts the card off the canvas, which is fixed at zIndex 0. */}
       <div className="login-card" style={{
-        background: '#fff', borderRadius: 16, padding: '48px 40px',
-        width: '100%', maxWidth: 380,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
-        border: '1px solid #e5e7eb',
+        position: 'relative', zIndex: 1,
+        background: '#fff', borderRadius: 16, padding: '44px 40px',
+        width: '100%', maxWidth: 390,
+        boxShadow: '0 1px 2px rgba(16,24,40,0.04), 0 12px 32px rgba(16,24,40,0.06)',
+        border: '1px solid #eef0f3',
       }}>
-        {/* Logo */}
+        {/* Logo — the wordmark already reads "PhysioWard Sports & Rehab", so
+            there is no separate name line under it. */}
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <img
+            src={logoSrc}
+            alt="PhysioWard Sports & Rehab"
+            style={{
+              width: '100%', maxWidth: 216, height: 'auto',
+              display: 'block', margin: '0 auto 18px',
+            }}
+          />
           <div style={{
-            width: 52, height: 52, background: '#0f6e56',
-            borderRadius: 14, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', margin: '0 auto 16px',
+            fontSize: 11, color: '#9ca3af', fontWeight: 500,
+            letterSpacing: '0.16em', textTransform: 'uppercase',
           }}>
-            <span style={{ color: '#fff', fontWeight: 700, fontSize: 18, letterSpacing: 1 }}>PW</span>
-          </div>
-          <div style={{ fontWeight: 700, fontSize: 20, color: '#111827' }}>PhysioWard</div>
-          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4, letterSpacing: '0.04em' }}>
-            INTERNAL PORTAL
+            Internal Portal
           </div>
         </div>
 
@@ -129,7 +142,7 @@ export default function LoginPage() {
         </div>
 
         <div style={{ textAlign: 'center', marginTop: 24, fontSize: 12, color: '#9ca3af' }}>
-          PhysioWard Sports & Rehab · Internal Use Only
+          Internal use only
         </div>
       </div>
     </div>
