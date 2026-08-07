@@ -248,6 +248,10 @@ export default function DropoutEntryPage() {
   const [draftId, setDraftId] = useState<string | null>(null)
   const [savingDraft, setSavingDraft] = useState(false)
   const [showDraftBlocker, setShowDraftBlocker] = useState(false)
+  // One-shot "I saw the drafts warning, save it anyway". A ref rather than a
+  // parameter on onSubmit because onSubmit is wired straight to onClick, and a
+  // click event as the first argument would read as a permanent bypass.
+  const bypassDraftBlocker = useRef(false)
 
   const reloadDrafts = useCallback(async () => {
     try { setDrafts(await draftsApi.list<FormState>('dropout')) }
@@ -508,9 +512,12 @@ export default function DropoutEntryPage() {
   const onSubmit = async () => {
     setError('')
 
-    // Block new entry creation when unfinished drafts exist and the user is
-    // NOT currently resuming one of them.
-    if (!editingId && !draftId && drafts.length > 0) {
+    // Warn about unfinished drafts when creating a new entry and the user is
+    // NOT currently resuming one of them. Consumed immediately so the next
+    // save warns again.
+    const bypassed = bypassDraftBlocker.current
+    bypassDraftBlocker.current = false
+    if (!bypassed && !editingId && !draftId && drafts.length > 0) {
       setShowDraftBlocker(true)
       return
     }
@@ -1228,6 +1235,11 @@ export default function DropoutEntryPage() {
         <DraftBlockerModal
           drafts={drafts}
           onResume={(d) => { resumeDraft(d); setShowDraftBlocker(false) }}
+          onProceed={() => {
+            bypassDraftBlocker.current = true
+            setShowDraftBlocker(false)
+            onSubmit()
+          }}
           onClose={() => setShowDraftBlocker(false)}
         />
       )}

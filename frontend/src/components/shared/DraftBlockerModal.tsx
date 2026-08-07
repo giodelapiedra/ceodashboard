@@ -17,18 +17,25 @@ function savedAgo(iso: string): string {
 }
 
 /**
- * Blocks the user from submitting a new entry when they have unfinished drafts.
- * Lists each draft with a Resume button. No "proceed anyway" — drafts must be
- * finished or deleted first via the DraftsPanel or My Drafts page.
+ * Warns the user about unfinished drafts before they submit a new entry, and
+ * lists each one with a Resume button.
+ *
+ * This used to be a hard block. It is now a speed bump: `onProceed` saves the
+ * new entry anyway and leaves the drafts untouched. Staff hit this legitimately
+ * — a draft parked for a patient they are waiting on should not stop them
+ * keying the person in front of them.
  */
 export default function DraftBlockerModal<T>({
   drafts,
   onResume,
+  onProceed,
   onClose,
 }: {
-  drafts:   DraftDTO<T>[]
-  onResume: (d: DraftDTO<T>) => void
-  onClose:  () => void
+  drafts:    DraftDTO<T>[]
+  onResume:  (d: DraftDTO<T>) => void
+  /** Save the new entry regardless. Drafts are kept. */
+  onProceed: () => void
+  onClose:   () => void
 }) {
   const count = drafts.length
 
@@ -68,7 +75,7 @@ export default function DraftBlockerModal<T>({
               fontSize: 18, flexShrink: 0,
             }}>✏️</div>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: TEXT }}>
-              Finish your draft first
+              You have {count === 1 ? 'an unfinished draft' : 'unfinished drafts'}
             </h2>
           </div>
           <button
@@ -82,12 +89,8 @@ export default function DraftBlockerModal<T>({
         </div>
 
         <p style={{ margin: '0 0 20px', fontSize: 13, color: TEXT_SOFT, lineHeight: 1.6 }}>
-          You have{' '}
-          <strong style={{ color: TEXT }}>
-            {count === 1 ? 'an unfinished draft' : `${count} unfinished drafts`}
-          </strong>
-          . Resume and complete {count === 1 ? 'it' : 'one'}, or delete{' '}
-          {count === 1 ? 'it' : 'them all'} via <em>My Drafts</em>, before adding a new entry.
+          Resume and complete {count === 1 ? 'it' : 'one'} below, or carry on and add this new
+          entry anyway — {count === 1 ? 'the draft stays' : 'your drafts stay'} saved either way.
         </p>
 
         {/* Draft list */}
@@ -130,6 +133,30 @@ export default function DraftBlockerModal<T>({
         }}>
           To discard {count === 1 ? 'this draft' : 'drafts'}, use the <strong>Delete</strong> button in the
           {' '}<em>Saved drafts</em> panel above, or go to <strong>My Drafts</strong>.
+        </div>
+
+        {/* Actions. Proceed is deliberately the quieter of the two — resuming
+            an existing draft is still the outcome we want more often. */}
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: 10,
+          marginTop: 18, flexWrap: 'wrap',
+        }}>
+          <button
+            onClick={onClose}
+            style={{
+              background: '#fff', color: TEXT_SOFT, border: `1px solid ${BORDER}`,
+              borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+            }}
+          >Cancel</button>
+          <button
+            onClick={onProceed}
+            style={{
+              background: TEAL, color: '#fff', border: `1px solid ${TEAL}`,
+              borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+            }}
+          >Proceed &amp; add entry</button>
         </div>
       </div>
     </div>
