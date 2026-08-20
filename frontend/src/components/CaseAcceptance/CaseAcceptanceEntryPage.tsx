@@ -562,6 +562,8 @@ export default function CaseAcceptanceEntryPage() {
     if (!isReceptionist && !form.front_staff_name)
                                                return setError('Front of staff name is required')
     if (!form.transition_notes.trim())         return setError('Treatment Plan notes are required — explain what was discussed and any objections')
+    if (!form.prepay_offered)                  return setError('Prepay offered is required')
+    if (!form.prepay_accepted)                 return setError('Prepay accepted is required')
 
     // Whole numbers only — parseInt would silently truncate "3.7" to 3.
     if (!/^\d+$/.test(form.case_recommendations.trim())) return setError('Case recommendations must be a whole number')
@@ -974,12 +976,12 @@ export default function CaseAcceptanceEntryPage() {
 
             {/* ── Row 4: Prepay offered / Prepay accepted ── */}
             <div className="pw-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-              <Field label="Prepay offered">
+              <Field label="Prepay offered *">
                 <TriSelect value={form.prepay_offered}
                   onChange={v => setForm({ ...form, prepay_offered: v })} />
               </Field>
 
-              <Field label="Prepay accepted">
+              <Field label="Prepay accepted *">
                 <TriSelect value={form.prepay_accepted}
                   onChange={v => setForm({ ...form, prepay_accepted: v })} />
               </Field>

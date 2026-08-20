@@ -30,6 +30,14 @@ const countField = z.coerce.number().int().min(0).max(1000);
 // already-normalized JSON: null | true | false.
 const triBool = z.boolean().nullable();
 
+// Prepay fields are required going forward: the form must have Y or N picked
+// before it can submit, so a create request with no value (or an explicit
+// null) is either a stale client or a direct API call bypassing the form.
+const requiredPrepay = z.boolean({
+  required_error:   'Prepay field is required',
+  invalid_type_error: 'Prepay field must be true or false',
+});
+
 // What to do when an entry with the same natural key already exists. Absent
 // (= 'reject') is the safe default: an old client, or a direct API call, gets
 // the 409 rather than silently creating the duplicate this feature prevents.
@@ -45,8 +53,8 @@ const baseShape = {
   treatment_plan_provided:  triBool.optional(),
   case_recommendations:     countField,
   appointments_booked:      countField,
-  prepay_offered:           triBool.optional(),
-  prepay_accepted:          triBool.optional(),
+  prepay_offered:           requiredPrepay,
+  prepay_accepted:          requiredPrepay,
   transition_notes:         z.string().max(2000).nullable().optional(),
   notes:                    z.string().max(2000).nullable().optional(),
 };
@@ -66,8 +74,8 @@ export const updateCaseAcceptanceSchema = z.object({
   treatment_plan_provided:  triBool.optional(),
   case_recommendations:     countField.optional(),
   appointments_booked:      countField.optional(),
-  prepay_offered:           triBool.optional(),
-  prepay_accepted:          triBool.optional(),
+  prepay_offered:           requiredPrepay.optional(),
+  prepay_accepted:          requiredPrepay.optional(),
   transition_notes:         z.string().max(2000).nullable().optional(),
   notes:                    z.string().max(2000).nullable().optional(),
 })
