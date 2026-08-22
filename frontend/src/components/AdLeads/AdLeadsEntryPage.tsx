@@ -5,7 +5,9 @@ import {
 import { DuplicateReport, OnDuplicate, duplicateReportFromError } from '../../api/duplicates'
 import { editRequestsApi, EditRequestDTO } from '../../api/editRequests.api'
 import { deleteRequestsApi } from '../../api/deleteRequests.api'
-import { AdLeadDTO, AD_LEAD_PLATFORMS, AdLeadPlatform, BELLA_CONTACT_OPTIONS } from '../../types'
+import {
+  AdLeadDTO, AD_LEAD_PLATFORMS, AdLeadPlatform, BELLA_CONTACT_OPTIONS, canRemoveAdLead,
+} from '../../types'
 import { useAuthStore } from '../../store/auth.store'
 import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
@@ -68,18 +70,6 @@ function adLeadDiffFields(existing: AdLeadDTO, incoming: AdLeadValues): Duplicat
   ]
 }
 
-/** Only the fields that actually changed — an edit request should ask the
- *  admin to approve the difference, not re-state the whole row. */
-function adLeadPatchFrom(existing: AdLeadDTO, incoming: AdLeadValues): Record<string, unknown> {
-  const patch: Record<string, unknown> = {}
-  if (incoming.campaign_name !== (existing.campaign_name ?? null)) patch.campaign_name = incoming.campaign_name
-  if (incoming.booked        !== existing.booked)                  patch.booked        = incoming.booked
-  if (incoming.bella_called  !== (existing.bella_called  ?? null)) patch.bella_called  = incoming.bella_called
-  if (incoming.bella_sms     !== (existing.bella_sms     ?? null)) patch.bella_sms     = incoming.bella_sms
-  if (incoming.bella_remarks !== (existing.bella_remarks ?? null)) patch.bella_remarks = incoming.bella_remarks
-  return patch
-}
-
 function emptyForm(): LeadForm {
   return {
     patient_name: '', platform: '', campaign_name: '', date_added: todayISO(),
@@ -90,8 +80,12 @@ function emptyForm(): LeadForm {
 function formFromRow(row: AdLeadDTO): LeadForm {
   return {
     patient_name:  row.patient_name,
-    platform:      (AD_LEAD_PLATFORMS as readonly string[]).includes(row.platform)
-                     ? (row.platform as AdLeadPlatform) : AD_LEAD_PLATFORMS[0],
+    // Keep whatever the row actually holds. This used to fall back to
+    // AD_LEAD_PLATFORMS[0] when the value was not in the dropdown, which
+    // silently relabelled imported platforms ('Facebook NEW Landing Ad' lost
+    // its identity on any edit). The select renders an unknown value as an
+    // extra option, and an unchanged platform is never sent in the patch.
+    platform:      row.platform as AdLeadPlatform,
     campaign_name: row.campaign_name ?? '',
     date_added:    row.date_added,
     booked:        row.booked,
@@ -106,8 +100,15 @@ export default function AdLeadsEntryPage() {
   if (!user) return null
 
   const isAdmin = user.role === 'ADMIN'
+  // Everyone who can open this page may add AND edit — the ad-spend encoder
+  // included since 2026-08-12. Only deleting is still withheld from it.
+  // Server enforces both in ad-leads.service.ts and the two request services.
+  const canDelete = canRemoveAdLead(user.role)
+  // Who puts a change through the approval flow: every encoder, but not the
+  // admin (who edits directly).
+  const canRequestChanges = !isAdmin
   // Brookvale-only feature: FRONT_DESK is pinned server-side; everyone else
-  // (FRONT_DESK_GLOBAL / ADMIN) sends the clinic explicitly.
+  // (FRONT_DESK_GLOBAL / ADMIN / ADSPEND) sends the clinic explicitly.
   const createClinic = user.role === 'FRONT_DESK' ? undefined : 'brookvale'
 
   // Tabs (Encode | All Entries) — admin lands on the full view, encoders on Encode.
@@ -135,27 +136,29 @@ export default function AdLeadsEntryPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // ── Approval-flow state (non-admin only) ──
+  // ── Approval-flow state (encoders only) ──
+  // Skipped for the admin, who edits directly and so has no request to track —
+  // these would be three pointless calls per load.
   // Lead ids this user has an open EDIT request for → swaps Edit for a badge.
   const [pendingEdits, setPendingEdits] = useState<Set<string>>(new Set())
   const reloadPendingEdits = useCallback(async () => {
-    if (isAdmin) return
+    if (!canRequestChanges) return
     try {
       const refs = await editRequestsApi.mine()
       setPendingEdits(new Set(refs.filter(r => r.entity_type === 'ad_lead').map(r => r.entity_id)))
     } catch { /* non-fatal */ }
-  }, [isAdmin])
+  }, [canRequestChanges])
   useEffect(() => { reloadPendingEdits() }, [reloadPendingEdits])
 
   // Lead ids this user has an open DELETE request for → swaps Delete for a badge.
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set())
   const reloadPendingDeletes = useCallback(async () => {
-    if (isAdmin) return
+    if (!canRequestChanges) return
     try {
       const refs = await deleteRequestsApi.mine()
       setPendingDeletes(new Set(refs.filter(r => r.entity_type === 'ad_lead').map(r => r.entity_id)))
     } catch { /* non-fatal */ }
-  }, [isAdmin])
+  }, [canRequestChanges])
   useEffect(() => { reloadPendingDeletes() }, [reloadPendingDeletes])
 
   // Recently rejected edit requests — shown as dismissible banners.
@@ -165,7 +168,7 @@ export default function AdLeadsEntryPage() {
     catch { return new Set() }
   })
   useEffect(() => {
-    if (isAdmin) return
+    if (!canRequestChanges) return
     editRequestsApi.myRejected().then(list => {
       // One banner per lead — keep only the latest rejection (list is newest-first).
       const latestPerEntity = new Map<string, EditRequestDTO>()
@@ -174,7 +177,7 @@ export default function AdLeadsEntryPage() {
       }
       setRejectedEdits([...latestPerEntity.values()])
     }).catch(() => {})
-  }, [isAdmin])
+  }, [canRequestChanges])
   const dismissRejected = (id: string) => {
     const next = new Set(dismissedIds).add(id)
     setDismissedIds(next)
@@ -196,13 +199,14 @@ export default function AdLeadsEntryPage() {
   // all-time is the useful default view. "All dates" clears back to it.
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo]     = useState('')
-  const [platformFilter, setPlatformFilter] = useState<AdLeadPlatform | ''>('')
+  // Multi-select — e.g. every Facebook variant at once instead of one at a time.
+  const [platformFilter, setPlatformFilter] = useState<AdLeadPlatform[]>([])
   const [bookedFilter, setBookedFilter]     = useState<'' | 'true' | 'false'>('')
 
-  const hasFilters = !!(search || dateFrom || dateTo || platformFilter || bookedFilter)
+  const hasFilters = !!(search || dateFrom || dateTo || platformFilter.length > 0 || bookedFilter)
   const clearFilters = () => {
     setSearchInput(''); setDateFrom(''); setDateTo('')
-    setPlatformFilter(''); setBookedFilter('')
+    setPlatformFilter([]); setBookedFilter('')
   }
 
   useEffect(() => { resetPage() }, [search, dateFrom, dateTo, platformFilter, bookedFilter, resetPage])
@@ -221,7 +225,7 @@ export default function AdLeadsEntryPage() {
         search:    search   || undefined,
         date_from: searching ? undefined : (dateFrom || undefined),
         date_to:   searching ? undefined : (dateTo   || undefined),
-        platform:  platformFilter || undefined,
+        platform:  platformFilter.length > 0 ? platformFilter : undefined,
         booked:    bookedFilter === '' ? undefined : bookedFilter === 'true',
       }
       const [listRes, sumRes] = await Promise.all([
@@ -264,71 +268,32 @@ export default function AdLeadsEntryPage() {
     (max, r) => (r.nookal_synced_at && (!max || r.nookal_synced_at > max) ? r.nookal_synced_at : max), null)
 
   /**
-   * Show the duplicate dialog for an exact match and turn the answer into the
-   * next action:
-   *   'allow'     → POST it as a genuinely separate lead
-   *   'overwrite' → POST with on_duplicate=overwrite (own lead, or admin)
-   *   'handled'   → an edit request was filed instead; nothing left to do
-   *   null        → user backed out, save nothing
+   * Show the duplicate dialog for an exact match. The only outcomes are save it
+   * anyway as a second lead ('allow') or back out (null) — a duplicate never
+   * overwrites the saved lead and never goes into the approval queue.
    */
   const resolveDuplicate = async (
     report:   DuplicateReport<AdLeadDTO>,
     incoming: AdLeadValues
-  ): Promise<'allow' | 'overwrite' | 'handled' | null> => {
+  ): Promise<'allow' | null> => {
     const existing = report.exact!
     const owner    = existing.entered_by_name || 'another user'
 
     const choice = await duplicateDialog.ask({
-      title:         'This lead is already logged',
-      subtitle:      [existing.patient_name, existing.platform, existing.date_added].join('  ·  '),
-      existingMeta:  `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
-      fields:        adLeadDiffFields(existing, incoming),
-      primaryLabel:  report.can_overwrite ? 'Overwrite existing lead' : 'Send update for approval',
-      primaryNote:   report.can_overwrite
-        ? 'Overwriting replaces the saved values. The old ones stay in the audit log.'
-        : `${owner} logged that lead, so an admin has to approve the change.`,
-      separateLabel: 'Not a duplicate — save separately',
+      title:        'This lead is already logged',
+      subtitle:     [existing.patient_name, existing.platform, existing.date_added].join('  ·  '),
+      existingMeta: `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
+      fields:       adLeadDiffFields(existing, incoming),
+      saveLabel:    'Save anyway',
+      saveNote:     'Check the platform and date before saving a second lead.',
     })
 
-    if (choice === 'cancel')   return null
-    if (choice === 'separate') return 'allow'
-    if (report.can_overwrite)  return 'overwrite'
-
-    // No direct write → file an edit request against the lead that exists,
-    // rather than adding a second one.
-    const patch = adLeadPatchFrom(existing, incoming)
-    if (Object.keys(patch).length === 0) {
-      toast.error('Nothing to change — your entry matches the saved lead exactly')
-      return null
-    }
-
-    const reason = await promptDialog.ask({
-      title:        'Why should this lead be changed?',
-      message:      `Patient: ${existing.patient_name}\n\nThe admin reviews this together with your changes.`,
-      placeholder:  'e.g. Lead booked in after the first entry',
-      confirmLabel: 'Submit for approval',
-    })
-    if (reason === null) return null
-
-    try {
-      await editRequestsApi.create({
-        entity_type: 'ad_lead',
-        entity_id:   existing.id,
-        reason:      reason.trim() || 'Duplicate lead — corrected values',
-        patch,
-      })
-      toast.success('Edit request submitted — waiting for admin approval')
-      return 'handled'
-    } catch (e: any) {
-      toast.error(e.response?.data?.error?.message || 'Failed to submit edit request')
-      return null
-    }
+    return choice === 'save' ? 'allow' : null
   }
 
   const onSubmit = async () => {
     setFormErr('')
     if (!form.patient_name.trim()) { setFormErr('Prospective Patient Name is required'); return }
-    if (!form.platform)            { setFormErr('Platform Source is required'); return }
     if (!form.date_added)          { setFormErr('Date Added is required'); return }
 
     const common = {
@@ -421,9 +386,6 @@ export default function AdLeadsEntryPage() {
       if (report?.exact) {
         const decision = await resolveDuplicate(report, incoming)
         if (decision === null) return
-        if (decision === 'handled') {
-          resetForm(); await loadEntries(); await reloadPendingEdits(); setActiveTab('entries'); return
-        }
         onDuplicate = decision
       } else if (report && report.similar.length > 0) {
         // Tier 2: same person within two weeks on another platform or date.
@@ -452,7 +414,6 @@ export default function AdLeadsEntryPage() {
       } else {
         const payload: CreateAdLeadPayload = { clinic_id: createClinic, ...common }
 
-        let overwrote = onDuplicate === 'overwrite'
         try {
           await adLeadsApi.create({ ...payload, ...(onDuplicate ? { on_duplicate: onDuplicate } : {}) })
         } catch (e: any) {
@@ -463,14 +424,10 @@ export default function AdLeadsEntryPage() {
 
           const decision = await resolveDuplicate(raced, incoming)
           if (decision === null) return
-          if (decision === 'handled') {
-            resetForm(); await loadEntries(); await reloadPendingEdits(); setActiveTab('entries'); return
-          }
-          overwrote = decision === 'overwrite'
           await adLeadsApi.create({ ...payload, on_duplicate: decision })
         }
 
-        toast.success(overwrote ? 'Overwrote the existing lead' : 'Lead saved')
+        toast.success('Lead saved')
       }
       resetForm()
       await loadEntries()
@@ -516,11 +473,14 @@ export default function AdLeadsEntryPage() {
   }
 
   // Ad-leads are a shared team inbox — every row the server returns is already
-  // within this user's clinic scope (FRONT_DESK = own clinic, FRONT_DESK_GLOBAL
-  // = all). So any front-desk user may edit-request / delete-request any visible
-  // lead, not just ones they personally encoded. ADMIN edits directly.
-  const isEditable = (_row: AdLeadDTO) =>
-    isAdmin || user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL'
+  // within this user's clinic scope (FRONT_DESK = own clinic, everyone else =
+  // all clinics). So ANY login on this page may edit any visible lead, not just
+  // ones they personally encoded: ADMIN directly, everyone else through admin
+  // approval. There is no per-row edit gate left, which is why the Edit button
+  // below is unconditional.
+  //
+  // Deleting is the one thing still withheld from the ad-spend encoder.
+  const canRequestDelete = (_row: AdLeadDTO) => canDelete
 
   return (
     <AppShell title="Meta/Google ADS Leads" hideNav>
@@ -548,10 +508,16 @@ export default function AdLeadsEntryPage() {
                   onChange={v => setForm(f => ({ ...f, patient_name: v }))}
                   placeholder="e.g. Jane Smith" style={inputStyle} />
               </Field>
-              <Field label="Platform Source *">
+              <Field label="Platform Source">
                 <select value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value as AdLeadPlatform }))} style={inputStyle}>
                   <option value="">— Select —</option>
                   {AD_LEAD_PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+                  {/* An imported platform that predates the dropdown still has
+                      to be visible here, or editing the lead would blank the
+                      select and quietly change the row's platform on save. */}
+                  {form.platform && !(AD_LEAD_PLATFORMS as readonly string[]).includes(form.platform) && (
+                    <option value={form.platform}>{form.platform} (imported)</option>
+                  )}
                 </select>
               </Field>
               <Field label="Campaign Name">
@@ -674,10 +640,7 @@ export default function AdLeadsEntryPage() {
               </div>
               <div style={filterCol}>
                 <span style={filterLabel}>Platform</span>
-                <select value={platformFilter} onChange={e => setPlatformFilter(e.target.value as AdLeadPlatform | '')} style={{ ...inputStyle, minWidth: 170 }}>
-                  <option value="">All platforms</option>
-                  {AD_LEAD_PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <PlatformFilterDropdown value={platformFilter} onChange={setPlatformFilter} />
               </div>
               <div style={filterCol}>
                 <span style={filterLabel}>Booked</span>
@@ -754,22 +717,22 @@ export default function AdLeadsEntryPage() {
                           <Td><span style={{ color: TEXT_SOFT }}>{r.bella_sms || <Dim>—</Dim>}</span></Td>
                           <Td><span style={{ color: TEXT_SOFT, fontSize: 12 }}>{r.bella_remarks || <Dim>—</Dim>}</span></Td>
                           <Td align="right">
-                            {isEditable(r) ? (
-                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                                {isAdmin || !pendingEdits.has(r.id) ? (
-                                  <button onClick={() => startEdit(r)} style={smallBtnStyle}>Edit</button>
-                                ) : (
-                                  <StatusChip label="Edit pending" color="blue" title="Your edit is waiting for admin approval" />
-                                )}
-                                {isAdmin ? (
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                              {isAdmin || !pendingEdits.has(r.id) ? (
+                                <button onClick={() => startEdit(r)} style={smallBtnStyle}>Edit</button>
+                              ) : (
+                                <StatusChip label="Edit pending" color="blue" title="Your edit is waiting for admin approval" />
+                              )}
+                              {canRequestDelete(r) && (
+                                isAdmin ? (
                                   <button onClick={() => onDelete(r)} style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}>Delete</button>
                                 ) : pendingDeletes.has(r.id) ? (
                                   <StatusChip label="Delete requested" color="amber" title="Waiting for admin approval" />
                                 ) : (
                                   <button onClick={() => onRequestDelete(r)} style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}>Request delete</button>
-                                )}
-                              </div>
-                            ) : <Dim>—</Dim>}
+                                )
+                              )}
+                            </div>
                           </Td>
                         </tr>
                       ))}
@@ -900,6 +863,111 @@ function StatusChip({ label, color, title }: { label: string; color: 'blue' | 'a
 }
 function Pill({ text }: { text: string }) {
   return <span style={{ background: '#f0faf7', color: TEAL, border: '1px solid #cdebde', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{text}</span>
+}
+
+// Every platform except Google Ads — i.e. every Facebook/Meta variant.
+const FACEBOOK_PLATFORMS = AD_LEAD_PLATFORMS.filter(p => p !== 'Google Ads') as AdLeadPlatform[]
+
+function sameSet(a: AdLeadPlatform[], b: AdLeadPlatform[]): boolean {
+  return a.length === b.length && a.every(p => b.includes(p))
+}
+
+/**
+ * Platform filter — checkbox popover instead of a plain <select> so several
+ * platforms (e.g. every Facebook variant) can be picked at once instead of
+ * one at a time. Includes an "All Facebook" quick pick for exactly that.
+ */
+function PlatformFilterDropdown({
+  value, onChange,
+}: { value: AdLeadPlatform[]; onChange: (next: AdLeadPlatform[]) => void }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const toggle = (p: AdLeadPlatform) => {
+    onChange(value.includes(p) ? value.filter(v => v !== p) : [...value, p])
+  }
+
+  const isAllFacebook = sameSet(value, FACEBOOK_PLATFORMS)
+  const label = value.length === 0
+    ? 'All platforms'
+    : isAllFacebook
+      ? 'All Facebook'
+      : value.length === 1
+        ? value[0]
+        : `${value.length} platforms selected`
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          ...inputStyle, minWidth: 170, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ fontSize: 9, color: TEXT_SOFT, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 20,
+          background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 8,
+          boxShadow: '0 12px 32px rgba(15, 23, 42, 0.16), 0 4px 8px rgba(15, 23, 42, 0.06)',
+          minWidth: 230, padding: 4, maxHeight: 280, overflowY: 'auto',
+        }}>
+          <button
+            type="button"
+            onClick={() => { onChange([]); setOpen(false) }}
+            style={platformOptionStyle(value.length === 0)}
+          >All platforms</button>
+          <button
+            type="button"
+            onClick={() => { onChange(FACEBOOK_PLATFORMS); setOpen(false) }}
+            style={platformOptionStyle(isAllFacebook)}
+          >All Facebook</button>
+          <div style={{ height: 1, background: BORDER, margin: '4px 2px' }} />
+          {AD_LEAD_PLATFORMS.map(p => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => toggle(p)}
+              style={platformOptionStyle(value.includes(p))}
+            >
+              <span style={{ width: 16, flexShrink: 0 }}>{value.includes(p) ? '✓' : ''}</span>
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+function platformOptionStyle(active: boolean): React.CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', gap: 6,
+    width: '100%', textAlign: 'left', padding: '7px 10px',
+    background: active ? '#f0faf7' : 'transparent',
+    color: active ? TEAL : TEXT,
+    border: 'none', borderRadius: 6,
+    fontSize: 12.5, fontWeight: active ? 600 : 500,
+    fontFamily: "'DM Sans', sans-serif", cursor: 'pointer', whiteSpace: 'nowrap',
+  }
 }
 
 const inputStyle: React.CSSProperties = {

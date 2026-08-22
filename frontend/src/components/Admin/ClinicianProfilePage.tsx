@@ -601,20 +601,25 @@ export default function ClinicianProfilePage() {
                 {/* Summary cards */}
                 <div className="pw-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 16 }}>
                   <SummaryCard label="Entries"  value={cs?.total ?? 0} highlight />
+                  {/* Recs / Booked / Acceptance are all AVERAGES per entry, matching
+                      the Case Acceptance admin page. Raw totals stay in the sub-line. */}
                   <SummaryCard
-                    label="Recs"
-                    value={cs?.totalRecommendations ?? 0}
-                    sub={cs && cs.totalRecommendations > 0 ? `${pct(cs.totalBooked, cs.totalRecommendations)}% booked` : ''}
+                    label="Recs (avg)"
+                    value={cs && cs.total > 0 ? (cs.totalRecommendations / cs.total).toFixed(1) : '—'}
+                    sub={cs && cs.total > 0 ? `${cs.totalRecommendations} total / ${cs.total} entries` : ''}
                   />
                   <SummaryCard
-                    label="Booked"
-                    value={cs?.totalBooked ?? 0}
-                    sub={cs?.caseAcceptancePct != null ? `${cs.caseAcceptancePct.toFixed(1)}% acceptance` : ''}
+                    label="Booked (avg)"
+                    value={cs && cs.total > 0 ? (cs.totalBooked / cs.total).toFixed(1) : '—'}
+                    sub={cs && cs.total > 0 ? `${cs.totalBooked} total / ${cs.total} entries` : ''}
                   />
+                  {/* Mean of the per-entry ACCEPTANCE column, not sum-booked/sum-recs. */}
                   <SummaryCard
-                    label="Acceptance"
-                    value={cs?.caseAcceptancePct == null ? '—' : `${cs.caseAcceptancePct.toFixed(1)}%`}
-                    sub={cs ? `${cs.totalBooked} / ${cs.totalRecommendations}` : ''}
+                    label="Acceptance (avg)"
+                    value={cs?.avgAcceptancePct == null ? '—' : `${cs.avgAcceptancePct.toFixed(2)}%`}
+                    sub={cs?.avgAcceptancePct == null
+                      ? ''
+                      : `avg of ${cs.entriesWithRecs} ${cs.entriesWithRecs === 1 ? 'entry' : 'entries'}`}
                   />
                   <SummaryCard
                     label="Prepay offered"

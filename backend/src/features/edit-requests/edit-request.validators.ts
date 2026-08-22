@@ -5,6 +5,7 @@ import {
   DropoutStatus, DropoutReason,
   AD_LEAD_PLATFORMS, AdLeadPlatform,
 } from '../../shared/roles';
+import { patientNameProblem } from '../../shared/patient-name';
 
 const entityTypeEnum = z.enum(
   [...EDIT_ENTITY_TYPES] as [EditEntityType, ...EditEntityType[]]
@@ -31,7 +32,14 @@ const patchSchema = z.object({
   // case_acceptance fields
   front_staff_name:        z.string().min(1).max(120).trim().nullable().optional(),
   clinician_id:            idStr.optional(),
-  patient_name:            z.string().min(1).max(200).trim().optional(),
+  // Shared by all three entity types. A date here would be approved into the
+  // row and then never match anything downstream — reject it at request time.
+  patient_name:            z.string().min(1).max(200).trim()
+                             .superRefine((v, ctx) => {
+                               const problem = patientNameProblem(v);
+                               if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+                             })
+                             .optional(),
   date_logged:             isoDate.optional(),
   treatment_plan_provided: z.boolean().nullable().optional(),
   case_recommendations:    z.number().int().min(0).max(1000).optional(),

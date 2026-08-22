@@ -59,6 +59,21 @@ export interface CancellationDayRow {
    * keeps a future booking, so it is a cancellation event but NOT a churn.
    */
   churns: number;
+  /**
+   * The Cancellation % numerator: patients who dropped out, counted per ENTRY
+   * and bucketed exactly like churns.
+   *
+   * A SUBSET of churns. Sam settled this 2026-08-20: 'No Future Bookings' and
+   * 'Cancelled - not rescheduled' count, 'Completed Treatment Plan' does NOT —
+   * a patient who finished their treatment plan is a success, and counting that
+   * as a cancellation would penalise the practitioner for doing the job right.
+   * 'Re-scheduled' is out for the churn reason: the booking still exists.
+   *
+   * Whole practice, June 2026 Week 1, on 410 Total Appts: 70 no-future-booking
+   * + 22 cancelled-not-rescheduled = 92, so 22.4%. Including the 8 completed
+   * treatment plans would have read 24.4%.
+   */
+  cancellation_dropouts: number;
 }
 
 function isoDay(d: Date | string): string {
@@ -72,12 +87,23 @@ function isoDay(d: Date | string): string {
 }
 
 /**
- * Statuses that leave the patient with no future booking. 'Re-scheduled' is
- * deliberately absent — see CancellationDayRow.churns.
+ * Statuses that end in a genuine drop-off — the Cancellation % numerator.
+ * See CancellationDayRow.cancellation_dropouts for why these two and not more.
  */
-const CHURN_STATUSES = [
+const CANCELLATION_STATUSES = [
   'Cancelled - not rescheduled',
   'No Future Bookings',
+];
+
+/**
+ * Statuses that leave the patient with no future booking. 'Re-scheduled' is
+ * deliberately absent — see CancellationDayRow.churns.
+ *
+ * A superset of CANCELLATION_STATUSES: a completed treatment plan leaves no
+ * future booking, so it is a churn, but it is not a cancellation.
+ */
+const CHURN_STATUSES = [
+  ...CANCELLATION_STATUSES,
   'Completed Treatment Plan',
 ];
 
@@ -94,6 +120,29 @@ export interface WeekInputRow {
   cancelled_count: number | null;
   /** Null = never synced from Nookal (hand-entered only). */
   synced_at:     string | null;
+
+  /**
+   * Where occupancy_pct came from. 'nookal' = computed by the sync, 'manual' =
+   * a person typed it. NULL with a value present means it predates migration
+   * 029, and every one of those was hand-entered — so the service reads a NULL
+   * source with a value as manual.
+   */
+  occupancy_source: 'nookal' | 'manual' | 'nookal_report' | 'nookal_api' | null;
+  /**
+   * The minutes behind occupancy_pct, when Nookal computed it. Present so the
+   * Team row can pool — SUM(booked) / SUM(booked + available) — rather than
+   * averaging percentages, which is what migration 024 was stuck with.
+   */
+  occupancy_booked_minutes:    number | null;
+  occupancy_available_minutes: number | null;
+  occupancy_blocked_minutes:   number | null;
+  /**
+   * Nookal "Scheduled Minutes" — rostered shift time, and the denominator its
+   * own Occupancy report divides by. Only ever set by the report import
+   * (migration 030): the roster is absent from the v3 API, so the derived path
+   * cannot fill this in. NULL means occupancy was derived, not imported.
+   */
+  occupancy_scheduled_minutes: number | null;
 }
 
 export interface UpsertWeekInput {
@@ -212,8 +261,12 @@ export const practitionerStatsRepository = {
           GROUP BY d.clinician_id, d.clinic_id, cd::date`,
         [dateFrom, dateTo, clinicId]
       ),
-      query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
-        `SELECT d.clinician_id, d.clinic_id, last_cd::date AS day, COUNT(*)::bigint AS n
+      // Churns and the Cancellation % numerator come out of ONE query, grouped by
+      // status, rather than two queries with two status lists. They must agree
+      // about which patients stopped and when — a second query with its own
+      // date bucketing is a place for them to silently diverge.
+      query<{ clinician_id: string; clinic_id: string; day: Date; status: string; n: string }>(
+        `SELECT d.clinician_id, d.clinic_id, last_cd::date AS day, d.status, COUNT(*)::bigint AS n
            FROM patient_dropouts d
            CROSS JOIN LATERAL (
              SELECT MAX(cd) AS last_cd FROM unnest(${CHURN_DATES}) AS cd
@@ -222,7 +275,7 @@ export const practitionerStatsRepository = {
             AND agg.last_cd >= $1::date
             AND agg.last_cd <= $2::date
             AND ($3::text IS NULL OR d.clinic_id = $3)
-          GROUP BY d.clinician_id, d.clinic_id, last_cd::date`,
+          GROUP BY d.clinician_id, d.clinic_id, last_cd::date, d.status`,
         [dateFrom, dateTo, clinicId, CHURN_STATUSES]
       ),
     ]);
@@ -238,6 +291,7 @@ export const practitionerStatsRepository = {
           day,
           cancellations: 0,
           churns:        0,
+          cancellation_dropouts: 0,
         });
       }
       return row;
@@ -246,8 +300,12 @@ export const practitionerStatsRepository = {
     for (const r of events.rows) {
       slot(r.clinician_id, r.clinic_id, isoDay(r.day)).cancellations += Number(r.n);
     }
+    const isCancellation = new Set(CANCELLATION_STATUSES);
     for (const r of churns.rows) {
-      slot(r.clinician_id, r.clinic_id, isoDay(r.day)).churns += Number(r.n);
+      const row = slot(r.clinician_id, r.clinic_id, isoDay(r.day));
+      const n   = Number(r.n);
+      row.churns += n;
+      if (isCancellation.has(r.status)) row.cancellation_dropouts += n;
     }
 
     return [...merged.values()];
@@ -271,9 +329,17 @@ export const practitionerStatsRepository = {
       new_cases:     number | null;
       cancelled_count: number | null;
       synced_at:     Date | null;
+      occupancy_source:            'nookal' | 'manual' | 'nookal_report' | 'nookal_api' | null;
+      occupancy_booked_minutes:    number | null;
+      occupancy_available_minutes: number | null;
+      occupancy_blocked_minutes:   number | null;
+      occupancy_scheduled_minutes: number | null;
     }>(
       `SELECT clinician_id, year, month, week_num, total_appts, occupancy_pct,
-              new_cases, cancelled_count, synced_at
+              new_cases, cancelled_count, synced_at,
+              occupancy_source, occupancy_booked_minutes,
+              occupancy_available_minutes, occupancy_blocked_minutes,
+              occupancy_scheduled_minutes
          FROM practitioner_week_inputs
         WHERE year = $1 AND month = $2`,
       [year, month]
@@ -288,6 +354,11 @@ export const practitionerStatsRepository = {
       new_cases:     r.new_cases === null ? null : Number(r.new_cases),
       cancelled_count: r.cancelled_count === null ? null : Number(r.cancelled_count),
       synced_at:     r.synced_at ? r.synced_at.toISOString() : null,
+      occupancy_source:            r.occupancy_source,
+      occupancy_booked_minutes:    r.occupancy_booked_minutes    === null ? null : Number(r.occupancy_booked_minutes),
+      occupancy_available_minutes: r.occupancy_available_minutes === null ? null : Number(r.occupancy_available_minutes),
+      occupancy_blocked_minutes:   r.occupancy_blocked_minutes   === null ? null : Number(r.occupancy_blocked_minutes),
+      occupancy_scheduled_minutes: r.occupancy_scheduled_minutes === null ? null : Number(r.occupancy_scheduled_minutes),
     }));
   },
 
@@ -298,16 +369,54 @@ export const practitionerStatsRepository = {
    * All three values are overwritten, including with NULL, so clearing a
    * mistyped figure is possible. A row where all three are null is kept rather
    * than deleted: it records that someone looked and left it blank.
+   *
+   * Occupancy carries ownership with it (migration 029). The form posts all
+   * three figures on every save, including an occupancy the sync filled in and
+   * nobody touched — so marking every save 'manual' would quietly freeze that
+   * week against all future syncs. Only a value that DIFFERS from what is stored
+   * is treated as a person's own; an unchanged one keeps whatever source and
+   * minutes it already had. Clearing it hands the week back to the sync.
    */
   async upsertWeekInput(input: UpsertWeekInput): Promise<void> {
     await query(
       `INSERT INTO practitioner_week_inputs
-         (clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases, entered_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         (clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases,
+          entered_by, occupancy_source)
+       VALUES ($1,$2,$3,$4,$5,$6::numeric,$7,$8,
+               CASE WHEN $6::numeric IS NULL THEN NULL ELSE 'manual' END)
        ON CONFLICT (clinician_id, year, month, week_num) DO UPDATE
           SET total_appts   = EXCLUDED.total_appts,
               occupancy_pct = EXCLUDED.occupancy_pct,
               new_cases     = EXCLUDED.new_cases,
+
+              occupancy_source = CASE
+                WHEN EXCLUDED.occupancy_pct IS NULL THEN NULL
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_source
+                ELSE 'manual' END,
+
+              -- The stored minutes explain the stored percentage. Once a person
+              -- overrides the percentage they no longer explain anything, so
+              -- they go rather than sit there contradicting it.
+              occupancy_booked_minutes = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_booked_minutes ELSE NULL END,
+              occupancy_available_minutes = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_available_minutes ELSE NULL END,
+              occupancy_blocked_minutes = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_blocked_minutes ELSE NULL END,
+              occupancy_scheduled_minutes = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_scheduled_minutes ELSE NULL END,
+              occupancy_synced_at = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_synced_at ELSE NULL END,
+              occupancy_measured_days_after = CASE
+                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
+                  THEN practitioner_week_inputs.occupancy_measured_days_after ELSE NULL END,
+
               updated_at    = NOW(),
               updated_by    = EXCLUDED.entered_by`,
       [

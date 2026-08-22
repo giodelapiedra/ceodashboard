@@ -24,29 +24,6 @@ export interface PagedCaseAcceptance {
 }
 
 /**
- * Result of create(): the route needs to know whether a row was inserted or an
- * existing one replaced, to pick 201 vs 200 and the right audit action.
- */
-export interface CreateCaseAcceptanceResult {
-  row:      CaseAcceptanceDTO;
-  outcome:  'created' | 'overwritten';
-  /** The row as it looked BEFORE an overwrite — goes into the audit trail. */
-  replaced: CaseAcceptanceDTO | null;
-}
-
-/**
- * Who may overwrite an existing case-acceptance entry in place.
- *
- * ADMIN ONLY — and deliberately stricter than the dropout rule. update() below
- * already forbids every non-admin edit and routes them through the
- * edit-request approval flow; letting "overwrite on duplicate" write directly
- * would be a way around that. Non-admins get the edit-request path instead.
- */
-function canOverwriteCaseAcceptance(scope: RequestScope): boolean {
-  return scope.role === 'ADMIN';
-}
-
-/**
  * Which clinic an entry belongs to. FRONT_DESK_GLOBAL / CLINICIAN / ADMIN have
  * no pinned clinic and choose per entry; FRONT_DESK is pinned by scope so it
  * cannot cross clinics.
@@ -137,17 +114,13 @@ export const caseAcceptanceService = {
       },
       { excludeId: input.exclude_id }
     );
-    return {
-      exact,
-      similar,
-      can_overwrite: exact ? canOverwriteCaseAcceptance(scope) : false,
-    };
+    return { exact, similar };
   },
 
   async create(
     scope: RequestScope,
     input: CreateCaseAcceptanceBody
-  ): Promise<CreateCaseAcceptanceResult> {
+  ): Promise<CaseAcceptanceDTO> {
     // Resolve the entry's clinic. FRONT_DESK_GLOBAL and CLINICIAN both pick
     // per entry — physios rotate between clinics, so a CLINICIAN account
     // can log entries against any clinic regardless of their primary
@@ -209,35 +182,19 @@ export const caseAcceptanceService = {
       await lockDuplicateKey(client, caseAcceptanceLockKey(key));
       const { exact, similar } = await caseAcceptanceRepository.findDuplicates(key, {}, client);
 
-      // 'allow' = the user saw the diff and confirmed it is a separate entry.
-      if (exact && onDuplicate !== 'allow') {
-        const canOverwrite = canOverwriteCaseAcceptance(scope);
-
-        if (onDuplicate === 'reject') {
-          throw duplicateConflict<CaseAcceptanceDTO>('case acceptance entry', {
-            exact, similar, can_overwrite: canOverwrite,
-          });
-        }
-
-        // onDuplicate === 'overwrite'
-        if (!canOverwrite) {
-          throw Errors.forbidden(
-            'Changing an existing entry needs admin approval — submit an edit request instead'
-          );
-        }
-        await caseAcceptanceRepository.update(exact.id, values, scope.userId, client);
-
-        const updated = await caseAcceptanceRepository.findJoinedById(exact.id, client);
-        if (!updated) throw Errors.notFound(`Case acceptance ${exact.id} not found`);
-        return { row: updated, outcome: 'overwritten' as const, replaced: exact };
+      // 409 so the UI can show the diff. 'allow' = the user saw that diff and
+      // chose to save anyway — always honoured, whatever the role. The same
+      // patient on a different appointment date is not even an exact match; it
+      // comes back as `similar` and is only ever a heads-up.
+      if (exact && onDuplicate === 'reject') {
+        throw duplicateConflict<CaseAcceptanceDTO>('case acceptance entry', { exact, similar });
       }
 
-      const created = await caseAcceptanceRepository.create({
+      return caseAcceptanceRepository.create({
         clinic_id:  clinicId,
         entered_by: scope.userId,
         ...values,
       }, client);
-      return { row: created, outcome: 'created' as const, replaced: null };
     });
   },
 

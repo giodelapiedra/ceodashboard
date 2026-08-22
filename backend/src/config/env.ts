@@ -23,6 +23,14 @@ const EnvSchema = z.object({
   NOOKAL_V3_BASE_URL:      z.string().url().default('https://au-apiv3.nookal.com'),
   NOOKAL_V3_CLIENT_ID:     z.string().min(1),
   NOOKAL_V3_CLIENT_SECRET: z.string().min(1),
+
+  // ── Nookal Web Credentials (for browser-based occupancy scraping) ─────────
+  // These are the login credentials for the Nookal web app, used by Puppeteer
+  // to scrape the Occupancy report which has no API endpoint.
+  NOOKAL_WEB_URL:        z.string().url().default('https://auzone3.nookal.com'),
+  NOOKAL_WEB_COMPANY_ID: z.string().min(1).optional(),
+  NOOKAL_WEB_EMAIL:      z.string().email().optional(),
+  NOOKAL_WEB_PASSWORD:   z.string().min(1).optional(),
   // Real v3 location IDs (integers, different from v2 IDs). Discovered via
   // the `locations` query on 2026-04-22.
   NOOKAL_V3_LOCATION_NEWPORT:   z.coerce.number().int().default(1),

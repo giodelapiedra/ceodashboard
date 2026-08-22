@@ -3,7 +3,7 @@ import logoSrc from '../../assets/physioward-logo.png'
 import { useNavStore } from '../../store/nav.store'
 import { useAuthStore } from '../../store/auth.store'
 import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
-import { CLINIC_LABEL, ClinicId, isAdLeadsEncoder } from '../../types'
+import { CLINIC_LABEL, ClinicId, canAccessAdLeads } from '../../types'
 import AppShell from '../shared/AppShell'
 
 const TEAL   = '#0f6e56'
@@ -20,9 +20,14 @@ export default function ClinicianHomePage() {
   // into the CEO dashboard + admin tools (still reachable from the top menu too).
   const isAdmin = user?.role === 'ADMIN'
 
-  // Ad Leads (Meta/Google Leads) is restricted to specific front-desk logins
-  // (see AD_LEADS_ENCODER_EMAILS). The super admin gets a separate view-only card.
-  const canEncodeAdLeads = isAdLeadsEncoder(user?.email)
+  // The ad-spend encoder gets its own two-card version of this hub (ad spend +
+  // ad leads) — it has nothing to do with dropouts or case acceptance. Before
+  // 2026-08-12 it was hard-locked straight onto the ad-spend form with no hub.
+  const isAdSpend = user?.role === 'ADSPEND'
+
+  // Ad Leads (Meta/Google Leads): the whole front desk since 2026-08-12, plus
+  // the allow-listed ad-spend encoder. The super admin gets a separate card.
+  const canEncodeAdLeads = !!user && canAccessAdLeads(user.role, user.email)
 
   const clinicLabel = user?.clinic_id ? CLINIC_LABEL[user.clinic_id as ClinicId] : ''
 
@@ -61,7 +66,7 @@ export default function ClinicianHomePage() {
           margin: '0 0 32px',
           fontSize: 15, color: '#4b5563', fontWeight: 500,
         }}>
-          {isAdmin ? 'What would you like to do today?' : 'What would you like to record today?'}
+          {isAdmin || isAdSpend ? 'What would you like to do today?' : 'What would you like to record today?'}
         </p>
 
         <div style={{
@@ -72,6 +77,28 @@ export default function ClinicianHomePage() {
           maxWidth: isAdmin ? 960 : 640,
           width: '100%',
         }}>
+          {/* ── Ad-spend encoder: its own two cards, and none of the rest.
+                 Returns early so the dropout / case-acceptance cards below
+                 never render for this account. ── */}
+          {isAdSpend && (
+            <>
+              <ChoiceCard
+                icon={<AdSpendIcon />}
+                title="Ad Spend"
+                description="Log what was spent on each campaign, per clinic and per channel."
+                color={TEAL}
+                onClick={() => navigate('ad-spend-entry')}
+              />
+              <ChoiceCard
+                icon={<LeadsIcon />}
+                title="Meta/Google ADS Leads"
+                description="Log new ad leads from Facebook & Google campaigns, and view every encoded lead."
+                color={HEADER}
+                onClick={() => navigate('ad-leads-entry')}
+              />
+            </>
+          )}
+
           {/* Approval queues jump to the front of the hub — the admin lands here
               on login, so a pending request is the first thing in their eyeline. */}
           {isAdmin && editCount > 0 && (
@@ -96,25 +123,34 @@ export default function ClinicianHomePage() {
               onClick={() => navigate('admin-delete-requests')}
             />
           )}
-          <ChoiceCard
-            icon={<DropoutsIcon />}
-            title="Patient Dropouts"
-            description="Record patients who stopped treatment or did not continue care."
-            color={TEAL}
-            onClick={() => navigate('dropout-entry')}
-          />
-          <ChoiceCard
-            icon={<CaseAcceptanceIcon />}
-            title="Case Acceptance"
-            description="Log case presentations, recommendations, and appointment bookings."
-            color={HEADER}
-            onClick={() => navigate('case-acceptance-entry')}
-          />
-          {canEncodeAdLeads && (
+          {!isAdSpend && (
+            <ChoiceCard
+              icon={<DropoutsIcon />}
+              title="Patient Dropouts"
+              description="Record patients who stopped treatment or did not continue care."
+              color={TEAL}
+              onClick={() => navigate('dropout-entry')}
+            />
+          )}
+          {!isAdSpend && (
+            <ChoiceCard
+              icon={<CaseAcceptanceIcon />}
+              title="Case Acceptance"
+              description="Log case presentations, recommendations, and appointment bookings."
+              color={HEADER}
+              onClick={() => navigate('case-acceptance-entry')}
+            />
+          )}
+          {/* `!isAdmin` matters: canEncodeAdLeads is true for ADMIN too, so
+              without it the super admin got TWO cards with this same title —
+              and the one here points at 'ad-leads-entry', which is not an ADMIN
+              route, so it silently bounced back to this hub. Sam hit exactly
+              that on 2026-08-12. The admin's card is the next one down. */}
+          {canEncodeAdLeads && !isAdSpend && !isAdmin && (
             <ChoiceCard
               icon={<LeadsIcon />}
               title="Meta/Google ADS Leads"
-              description="Log new ad leads from Facebook & Google campaigns and track bookings."
+              description="Log new ad leads from Facebook & Google campaigns, and view every encoded lead."
               color={TEAL}
               onClick={() => navigate('ad-leads-entry')}
             />
@@ -123,9 +159,31 @@ export default function ClinicianHomePage() {
             <ChoiceCard
               icon={<LeadsIcon />}
               title="Meta/Google ADS Leads"
-              description="View all encoded ad-campaign leads (read-only)."
+              description="Log new ad leads and manage every encoded lead."
               color={HEADER}
               onClick={() => navigate('admin-ad-leads')}
+            />
+          )}
+          {/* Clinical Impact and Ad Spend used to be reachable only from the
+              topbar menu, buried a click deep inside a dropdown. Sam asked for
+              them on the hub instead (2026-08-16); both topbar entries are
+              gone, so these cards are now the ONLY way in for an admin. */}
+          {isAdmin && (
+            <ChoiceCard
+              icon={<ClinicalImpactIcon />}
+              title="Clinical Impact"
+              description="Weekly Practitioner Stats per clinic, Monday–Sunday, against the Clinical Impact KPI targets."
+              color={TEAL}
+              onClick={() => navigate('admin-practitioner-stats')}
+            />
+          )}
+          {isAdmin && (
+            <ChoiceCard
+              icon={<AdSpendIcon />}
+              title="Ad Spend"
+              description="Track what each campaign cost per clinic and channel, and how it compares to leads paid."
+              color={HEADER}
+              onClick={() => navigate('ad-spend-entry')}
             />
           )}
           {isAdmin && (
@@ -139,6 +197,9 @@ export default function ClinicianHomePage() {
           )}
         </div>
 
+        {/* Drafts only exist for dropout / case-acceptance entries, so the
+            ad-spend encoder has nothing to find behind this button. */}
+        {!isAdSpend && (
         <button
           onClick={() => navigate('drafts')}
           style={{
@@ -167,6 +228,7 @@ export default function ClinicianHomePage() {
           <DraftsIcon />
           My Drafts
         </button>
+        )}
       </div>
     </AppShell>
   )
@@ -288,6 +350,23 @@ function DashboardIcon() {
       <line x1="18" y1="20" x2="18" y2="10" />
       <line x1="12" y1="20" x2="12" y2="4" />
       <line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  )
+}
+
+function ClinicalImpactIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  )
+}
+
+function AdSpendIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="1" x2="12" y2="23" />
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
     </svg>
   )
 }

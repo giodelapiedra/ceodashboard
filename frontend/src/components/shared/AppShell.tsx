@@ -3,7 +3,7 @@ import axios from 'axios'
 import { useAuthStore } from '../../store/auth.store'
 import { useNavStore, AppPage } from '../../store/nav.store'
 import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
-import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId, isAdLeadsEncoder } from '../../types'
+import { Role, ROLE_LABEL, CLINIC_LABEL, ClinicId, canAccessAdLeads } from '../../types'
 import { useMediaBelow } from '../../hooks/useMediaBelow'
 
 const TEAL    = '#0f6e56'
@@ -36,9 +36,11 @@ const NAV_TREE: Record<Role, NavItem[]> = {
       { page: 'admin-case-acceptance', label: 'Reports'          },
       { page: 'case-acceptance-entry', label: 'Manage entries'   },
     ]},
-    { kind: 'group', label: 'Clinical Impact', items: [
-      { page: 'admin-practitioner-stats', label: 'Practitioner Stats' },
-    ]},
+    // Clinical Impact (Practitioner Stats) and Ad Spend are deliberately NOT
+    // here. Sam moved both onto the /admin-home hub as cards (2026-08-16) —
+    // buried one-click-deep in a dropdown they were easy to miss, and he did
+    // not want them duplicated in two places. The "← Home" button below is the
+    // way back to the hub. See ClinicianHomePage for the cards.
     { kind: 'group', label: 'Ad Leads', items: [
       { page: 'admin-ad-leads',        label: 'Meta/Google Leads' },
     ]},
@@ -47,7 +49,6 @@ const NAV_TREE: Record<Role, NavItem[]> = {
       { page: 'admin-delete-requests', label: 'Delete Requests'  },
       { page: 'admin-edit-requests',  label: 'Edit Requests'    },
       { page: 'admin-activity-log',    label: 'Activity Log'     },
-      { page: 'ad-spend-entry',        label: 'Ad Spend'         },
     ]},
   ],
   CLINICIAN: [],  // clinician nav is handled by ClinicianHomePage landing screen
@@ -63,9 +64,11 @@ const NAV_TREE: Record<Role, NavItem[]> = {
     { kind: 'link', page: 'ad-leads-entry',        label: 'Meta/Google Leads' },
     { kind: 'link', page: 'drafts',                label: 'My Drafts'        },
   ],
-  ADSPEND: [
-    { kind: 'link', page: 'ad-spend-entry',        label: 'Ad Spend' },
-  ],
+  // Deliberately EMPTY. The ad-spend encoder picks between Ad Spend and
+  // Meta/Google Leads on its login hub (see ClinicianHomePage) — Sam asked for
+  // the choice to live there and not be duplicated as topbar tabs
+  // (2026-08-12). The "← Home" button below is how it gets back to the hub.
+  ADSPEND: [],
 }
 
 interface Props {
@@ -95,10 +98,10 @@ export default function AppShell({ children, withHeader = true, hideNav = false,
 
   if (!user) return <>{children}</>
 
-  // Ad Leads (Meta/Google Leads) is restricted to specific front-desk logins
-  // (see AD_LEADS_ENCODER_EMAILS). Every other front-desk account never sees the
-  // encode link. ADMIN's "Meta/Google Leads" is a separate admin page, unaffected.
-  const canSeeAdLeads = isAdLeadsEncoder(user.email)
+  // Ad Leads (Meta/Google Leads): open to the whole front desk since
+  // 2026-08-12, plus the allow-listed ad-spend encoder. Anyone else never sees
+  // the link. ADMIN's "Meta/Google Leads" is a separate admin page, unaffected.
+  const canSeeAdLeads = canAccessAdLeads(user.role, user.email)
   const items = hideNav ? [] : (NAV_TREE[user.role] ?? []).filter((it) =>
     !(it.kind === 'link' && it.page === 'ad-leads-entry' && !canSeeAdLeads)
   )
@@ -120,6 +123,8 @@ export default function AppShell({ children, withHeader = true, hideNav = false,
     user.role === 'CLINICIAN' ? 'clinician-home'
     : (user.role === 'FRONT_DESK' || user.role === 'FRONT_DESK_GLOBAL') ? 'frontdesk-home'
     : user.role === 'ADMIN' ? 'admin-home'
+    // ADSPEND has no topbar nav at all, so this is its ONLY way back to the hub.
+    : user.role === 'ADSPEND' ? 'adspend-home'
     : null
   const showHome = homePage !== null && page !== homePage
 

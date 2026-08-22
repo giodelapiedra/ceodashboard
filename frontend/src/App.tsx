@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { useAuthStore } from './store/auth.store'
-import { isAdLeadsEncoder } from './types'
+import { canAccessAdLeads } from './types'
 import { useNavStore } from './store/nav.store'
 import { useToastStore } from './store/toast.store'
 import { usePendingApprovalsStore } from './store/pendingApprovals.store'
@@ -44,22 +44,30 @@ export default function App() {
       // 'dashboard' (the '/' default) is intentionally NOT in this list, so a
       // fresh login lands on the hub. The dashboard is still reachable via the
       // hub card / top menu (navigating there doesn't re-fire this effect).
-      if (!['admin-home', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-ad-leads', 'admin-delete-requests', 'admin-edit-requests', 'admin-activity-log', 'admin-clinician-profile', 'dropout-entry', 'case-acceptance-entry', 'ad-spend-entry', 'drafts'].includes(page)) {
+      // 'admin-practitioner-stats' was missing here, so reloading the browser
+      // while on Practitioner Stats bounced the admin back to the hub. Now
+      // that a hub card points straight at it, that had to be fixed.
+      if (!['admin-home', 'admin-ceo-analytics', 'admin-users', 'admin-dropouts', 'admin-dropout-analytics', 'admin-case-acceptance', 'admin-practitioner-stats', 'admin-ad-leads', 'ad-leads-entry', 'admin-delete-requests', 'admin-edit-requests', 'admin-activity-log', 'admin-clinician-profile', 'dropout-entry', 'case-acceptance-entry', 'ad-spend-entry', 'drafts'].includes(page)) {
         navigate('admin-home')
       }
     } else if (user.role === 'ADSPEND') {
-      // The ad-spend encoder only ever sees the ad-spend entry page.
-      if (page !== 'ad-spend-entry') navigate('ad-spend-entry')
+      // Was hard-locked onto the ad-spend form; since 2026-08-12 it lands on a
+      // two-card hub (ad spend + ad leads). Ad-leads is still gated by the
+      // allow-list, so a future ADSPEND account that is not listed keeps the
+      // ad-spend page only.
+      const asAllowed = ['adspend-home', 'ad-spend-entry']
+      if (canAccessAdLeads(user.role, user.email)) asAllowed.push('ad-leads-entry')
+      if (!asAllowed.includes(page)) navigate('adspend-home')
     } else if (user.role === 'CLINICIAN') {
       if (!['clinician-home', 'dropout-entry', 'case-acceptance-entry', 'drafts'].includes(page)) {
         navigate('clinician-home')
       }
     } else {
       // FRONT_DESK / FRONT_DESK_GLOBAL land on the same card-style home page
-      // as clinicians, then pick what to record. Ad-leads is only reachable by
-      // allow-listed logins (see AD_LEADS_ENCODER_EMAILS).
+      // as clinicians, then pick what to record. Ad-leads is open to the whole
+      // front desk since 2026-08-12, on the same rules bella@ always had.
       const fdAllowed = ['frontdesk-home', 'dropout-entry', 'case-acceptance-entry', 'drafts']
-      if (isAdLeadsEncoder(user.email)) fdAllowed.push('ad-leads-entry')
+      if (canAccessAdLeads(user.role, user.email)) fdAllowed.push('ad-leads-entry')
       if (!fdAllowed.includes(page)) {
         navigate('frontdesk-home')
       }
@@ -157,12 +165,20 @@ export default function App() {
     else if (page === 'case-acceptance-entry')    page_node = <CaseAcceptanceEntryPage />
     else if (page === 'dropout-entry')            page_node = <DropoutEntryPage />
     else if (page === 'ad-spend-entry')           page_node = <AdSpendEntryPage />
+    // Same component as 'admin-ad-leads' above. The admin's own hub card and
+    // top menu both use 'admin-ad-leads', but /ad-leads-entry is a real URL an
+    // admin can bookmark or be linked to — without this line it silently fell
+    // through to the hub, which is how Sam found it on 2026-08-12.
+    else if (page === 'ad-leads-entry')           page_node = <AdLeadsEntryPage />
     else if (page === 'drafts')                   page_node = <DraftsPage />
     else                                          page_node = <ClinicianHomePage />
   } else if (user.role === 'ADSPEND') {
-    // Hard lock: the ad-spend encoder can ONLY ever render this one page,
-    // regardless of nav state. No dashboard, dropouts, or case acceptance.
-    page_node = <AdSpendEntryPage />
+    // Still a hard lock, just over three pages now instead of one: the hub, the
+    // ad-spend form, and — only for an allow-listed login — ad leads. No
+    // dashboard, dropouts, or case acceptance, whatever the nav state says.
+    if      (page === 'ad-spend-entry') page_node = <AdSpendEntryPage />
+    else if (page === 'ad-leads-entry' && canAccessAdLeads(user.role, user.email)) page_node = <AdLeadsEntryPage />
+    else                                page_node = <ClinicianHomePage />
   } else if (user.role === 'CLINICIAN') {
     if      (page === 'dropout-entry')         page_node = <DropoutEntryPage />
     else if (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
@@ -173,7 +189,7 @@ export default function App() {
     if      (page === 'case-acceptance-entry') page_node = <CaseAcceptanceEntryPage />
     else if (page === 'drafts')                page_node = <DraftsPage />
     else if (page === 'dropout-entry')         page_node = <DropoutEntryPage />
-    else if (page === 'ad-leads-entry' && isAdLeadsEncoder(user.email)) page_node = <AdLeadsEntryPage />
+    else if (page === 'ad-leads-entry' && canAccessAdLeads(user.role, user.email)) page_node = <AdLeadsEntryPage />
     else                                       page_node = <ClinicianHomePage />
   }
 

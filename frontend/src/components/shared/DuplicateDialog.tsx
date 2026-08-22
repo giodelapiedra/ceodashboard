@@ -12,19 +12,22 @@ const BORDER    = '#e5e7eb'
 /**
  * Shown when the entry being saved collides with one already in the database.
  *
+ * A warning, never a block: the only outcomes are "save it anyway as a second
+ * entry" and "back out". Nothing here edits the stored row or files anything
+ * for approval.
+ *
  * The diff table is the whole point: "duplicate!" on its own teaches staff to
  * dismiss the warning. Seeing exactly which fields differ from the stored row
  * is what lets them tell a real double-entry from a legitimately separate one.
  *
- * Cancel is the default (Esc, backdrop click) — nothing destructive happens by
- * accident.
+ * Cancel is the default (Esc, backdrop click) — nothing is saved by accident.
  */
 export default function DuplicateDialog() {
   const { current, resolve } = useDuplicateStore()
   const cancelBtnRef = useRef<HTMLButtonElement>(null)
 
-  // Focus lands on Cancel, NOT the primary. Unlike ConfirmDialog, the primary
-  // action here overwrites existing data — a reflex Enter must not trigger it.
+  // Focus lands on Cancel, NOT the primary. The point of the dialog is to make
+  // staff read the diff — a reflex Enter must not save straight through it.
   useEffect(() => {
     if (current) {
       const t = setTimeout(() => cancelBtnRef.current?.focus(), 30)
@@ -44,10 +47,7 @@ export default function DuplicateDialog() {
 
   if (!current) return null
 
-  const {
-    title, subtitle, existingMeta, fields,
-    primaryLabel, primaryNote, separateLabel,
-  } = current
+  const { title, subtitle, existingMeta, fields, saveLabel, saveNote } = current
 
   return (
     <div
@@ -139,6 +139,11 @@ export default function DuplicateDialog() {
               keyed twice. Cancelling changes nothing.
             </p>
           )}
+
+          <p style={{ margin: '12px 0 0', fontSize: 12.5, color: TEXT_SOFT, lineHeight: 1.5 }}>
+            Saving adds a second entry — the saved one is left exactly as it is.
+            To correct that one instead, cancel and edit it from the list.
+          </p>
         </div>
 
         <div style={{
@@ -146,11 +151,11 @@ export default function DuplicateDialog() {
           display: 'flex', flexWrap: 'wrap', alignItems: 'center',
           justifyContent: 'flex-end', gap: 8,
         }}>
-          {primaryNote && (
+          {saveNote && (
             <span style={{
               flex: '1 1 200px', minWidth: 0,
               fontSize: 11.5, color: TEXT_DIM, lineHeight: 1.4,
-            }}>{primaryNote}</span>
+            }}>{saveNote}</span>
           )}
 
           <button
@@ -159,20 +164,13 @@ export default function DuplicateDialog() {
             style={btnStyle({ background: '#fff', color: TEXT, border: `1px solid ${BORDER}` })}
           >Cancel</button>
 
-          {separateLabel && (
-            <button
-              onClick={() => resolve('separate')}
-              style={btnStyle({ background: '#fff', color: TEAL, border: `1px solid ${TEAL}` })}
-            >{separateLabel}</button>
-          )}
-
           <button
-            onClick={() => resolve('overwrite')}
+            onClick={() => resolve('save')}
             style={btnStyle({
               background: TEAL, color: '#fff', border: 'none', weight: 600,
               shadow: '0 1px 3px rgba(15,110,86,0.25)',
             })}
-          >{primaryLabel}</button>
+          >{saveLabel ?? 'Save anyway'}</button>
         </div>
       </div>
     </div>

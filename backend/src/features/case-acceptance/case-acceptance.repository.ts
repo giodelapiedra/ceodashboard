@@ -272,7 +272,7 @@ export const caseAcceptanceRepository = {
 
   /**
    * Aggregate metrics over the full filtered set (ignoring limit/offset).
-   * Drives the admin summary cards: totals and weighted case-acceptance %.
+   * Drives the admin summary cards: totals and case-acceptance %.
    */
   async aggregate(scope: RequestScope, filters: ListFilters = {}): Promise<{
     total:                number;
@@ -280,6 +280,16 @@ export const caseAcceptanceRepository = {
     totalBooked:          number;
     /** Weighted (sum booked / sum recs * 100) — null when no recs at all. */
     caseAcceptancePct:    number | null;
+    /**
+     * Unweighted MEAN of the per-entry acceptance % shown in the table's
+     * ACCEPTANCE column — every entry counts once, no matter how many recs it
+     * had. Rows with 0 recs have no percentage at all (the table shows a dash)
+     * so they are left out of both the mean and `entriesWithRecs`.
+     * Differs from the weighted figure: 66.67% vs 71.4% on the same 4 rows.
+     */
+    avgAcceptancePct:     number | null;
+    /** Entries that actually have a percentage — the mean's denominator. */
+    entriesWithRecs:      number;
     tpProvided:           number;
     tpNotProvided:        number;
     prepayOffered:        number;
@@ -293,6 +303,8 @@ export const caseAcceptanceRepository = {
         total:        string;
         sum_recs:     string | null;
         sum_booked:   string | null;
+        avg_pct:      string | null;
+        rows_with_recs: string;
         tp_yes:       string;
         tp_no:        string;
         prepay_off:   string;
@@ -303,6 +315,11 @@ export const caseAcceptanceRepository = {
           COUNT(*)::bigint                                                    AS total,
           COALESCE(SUM(c.case_recommendations), 0)::bigint                    AS sum_recs,
           COALESCE(SUM(c.appointments_booked), 0)::bigint                     AS sum_booked,
+          -- NULLIF drops 0-rec rows: AVG ignores NULLs, so they neither pull
+          -- the mean down nor count in the denominator.
+          AVG(c.appointments_booked::numeric
+              / NULLIF(c.case_recommendations, 0)) * 100                      AS avg_pct,
+          COUNT(*) FILTER (WHERE c.case_recommendations > 0)::bigint          AS rows_with_recs,
           COUNT(*) FILTER (WHERE c.treatment_plan_provided IS TRUE)::bigint   AS tp_yes,
           COUNT(*) FILTER (WHERE c.treatment_plan_provided IS FALSE)::bigint  AS tp_no,
           COUNT(*) FILTER (WHERE c.prepay_offered  IS TRUE)::bigint           AS prepay_off,
@@ -320,12 +337,16 @@ export const caseAcceptanceRepository = {
     const t = totals.rows[0];
     const recs   = Number(t?.sum_recs   ?? 0);
     const booked = Number(t?.sum_booked ?? 0);
+    // AVG() returns NULL when every row was filtered out (no entry had recs).
+    const avgPct = t?.avg_pct == null ? null : Number(t.avg_pct);
 
     return {
       total:                Number(t?.total       ?? 0),
       totalRecommendations: recs,
       totalBooked:          booked,
       caseAcceptancePct:    recs > 0 ? Math.round((booked / recs) * 10_000) / 100 : null,
+      avgAcceptancePct:     avgPct === null ? null : Math.round(avgPct * 100) / 100,
+      entriesWithRecs:      Number(t?.rows_with_recs ?? 0),
       tpProvided:           Number(t?.tp_yes      ?? 0),
       tpNotProvided:        Number(t?.tp_no       ?? 0),
       prepayOffered:        Number(t?.prepay_off  ?? 0),
@@ -363,7 +384,7 @@ export const caseAcceptanceRepository = {
   },
 
   /**
-   * Unscoped joined read. Used by create() / overwrite() to build the response
+   * Unscoped joined read. Used by create() to build the response
    * from INSIDE their own transaction — a scoped read on a pooled connection
    * would run on a different session and not see the uncommitted row.
    */

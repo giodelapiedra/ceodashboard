@@ -7,6 +7,7 @@ import { adLeadRepository } from '../ad-leads/ad-leads.repository';
 import { RequestScope } from '../../middleware/auth.middleware';
 import { withTransaction } from '../../db/pool';
 import { Errors } from '../../shared/errors';
+import { canRemoveAdLead } from '../../shared/roles';
 import { CreateDeleteRequestBody } from './delete-request.validators';
 import { notifyDeleteRequest } from '../../services/teams-notify.service';
 import type { PoolClient } from 'pg';
@@ -88,6 +89,14 @@ export const deleteRequestService = {
       throw Errors.validation('ADMIN deletes entries directly — no request needed');
     }
     if (body.entity_type === 'ad_lead') {
+      // The ad-spend encoder can add and edit leads but not remove them — Sam
+      // opened up editing on 2026-08-12, not deleting. Checked here because this
+      // flow deletes via the repository, bypassing ad-leads.service.delete.
+      if (!canRemoveAdLead(scope.role)) {
+        throw Errors.forbidden(
+          'Your account can add and edit leads but not remove them — ask the CEO or the front desk'
+        );
+      }
       // Shared team inbox — any front-desk user who can SEE the lead may request
       // its deletion, not just the creator (mirrors ad-leads list scope).
       const canSee =
@@ -96,6 +105,8 @@ export const deleteRequestService = {
       if (!canSee) throw Errors.forbidden('You cannot request deletion of this lead');
     } else if (entity.entered_by !== scope.userId) {
       // Dropout / case-acceptance keep the "your own entries only" rule.
+      // Deliberately NOT loosened alongside edit requests on 2026-08-12: Sam
+      // opened up editing each other's entries, not deleting them.
       throw Errors.forbidden('You can only request deletion of your own entries');
     }
 

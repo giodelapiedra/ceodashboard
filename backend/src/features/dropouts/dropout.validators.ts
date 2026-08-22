@@ -33,7 +33,7 @@ const frontStaffField = z.string().min(1).max(120).trim().nullable();
 // (= 'reject') is the safe default: an old client, or a direct API call, gets
 // the 409 rather than silently creating the duplicate this feature exists to
 // prevent.
-const onDuplicateEnum = z.enum(['reject', 'overwrite', 'allow']);
+const onDuplicateEnum = z.enum(['reject', 'allow']);
 
 export const createDropoutSchema = z.object({
   on_duplicate:               onDuplicateEnum.optional(),

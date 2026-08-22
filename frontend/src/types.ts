@@ -113,8 +113,10 @@ export const FRONT_STAFF_NAMES = [
   'Ann Maree',
   'Bella',
   'Brooke',
+  'Catherine',
   'Holly',
   'Jenny',
+  'Lisa Miller',
   'Tanya',
   'Tilly',
   'Vanessa',
@@ -190,6 +192,8 @@ export const AD_LEAD_PLATFORMS = [
   'Google Ads',
   'FB Paid Ad Quiz',
   "FB Over 40's Landing Page Ad",
+  // Added 2026-08-16 — mirrored in backend roles.ts. See the note there.
+  'Facebook NEW Landing Ad',
 ] as const;
 export type AdLeadPlatform = typeof AD_LEAD_PLATFORMS[number];
 
@@ -205,17 +209,35 @@ export const BELLA_CONTACT_OPTIONS = [
 ] as const;
 export type BellaContactOption = typeof BELLA_CONTACT_OPTIONS[number];
 
-// Front-desk accounts allowed into the Meta/Google Leads (ad-leads) section.
-// Only these logins see/encode leads; every other front-desk account has no
-// access. Mirrored in backend/src/shared/roles.ts (source of truth for the
-// server-side gate). ADMIN keeps its own read-only admin view separately.
-export const AD_LEADS_ENCODER_EMAILS: readonly string[] = [
-  'bella@physioward.com.au',
+// ── Meta/Google Leads (ad-leads) access ──────────────────────────────────────
+// Mirrors backend/src/shared/roles.ts, which is the source of truth — the
+// server re-checks both of these on every call. Two separate questions:
+//   1. canAccessAdLeads — may this login open the section at all?
+//   2. canRemoveAdLead  — once in, may it also DELETE?
+// Edit BOTH files when either list changes.
+
+/** Logins outside the front-desk roles that are still allowed in. */
+export const AD_LEADS_EXTRA_EMAILS: readonly string[] = [
+  'adspend@physioward.com.au',
 ];
 
-/** True if this login is one of the allow-listed ad-leads encoders. */
-export function isAdLeadsEncoder(email: string | null | undefined): boolean {
-  return !!email && AD_LEADS_ENCODER_EMAILS.includes(email.toLowerCase());
+/**
+ * Who may open the Meta/Google Leads section: ADMIN, every front-desk login
+ * (re-opened to the whole team 2026-08-12), plus AD_LEADS_EXTRA_EMAILS.
+ */
+export function canAccessAdLeads(role: Role, email: string | null | undefined): boolean {
+  if (role === 'ADMIN') return true;
+  if (role === 'FRONT_DESK' || role === 'FRONT_DESK_GLOBAL') return true;
+  return !!email && AD_LEADS_EXTRA_EMAILS.includes(email.toLowerCase());
+}
+
+/**
+ * Who may REMOVE a lead — directly for ADMIN, via a delete request for the front
+ * desk. Everyone who can open the section may add and edit; only deleting is
+ * still withheld from the ad-spend encoder (Sam, 2026-08-12).
+ */
+export function canRemoveAdLead(role: Role): boolean {
+  return role === 'ADMIN' || role === 'FRONT_DESK' || role === 'FRONT_DESK_GLOBAL';
 }
 
 export interface AdLeadDTO {

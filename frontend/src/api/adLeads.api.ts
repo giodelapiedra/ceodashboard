@@ -6,7 +6,8 @@ export interface ListAdLeadsFilters {
   clinic_id?: ClinicId;
   date_from?: string;
   date_to?:   string;
-  platform?:  AdLeadPlatform;
+  /** One platform, or several (multi-select filter). */
+  platform?:  AdLeadPlatform | AdLeadPlatform[];
   booked?:    boolean;
   search?:    string;
   limit?:     number;
@@ -22,7 +23,8 @@ export interface PagedAdLeads {
 export interface AdLeadDuplicateQuery {
   clinic_id?:   ClinicId;
   patient_name: string;
-  platform:     AdLeadPlatform;
+  /** Optional — '' / omitted means "not specified". */
+  platform?:    AdLeadPlatform | '';
   date_added:   string;
   /** Ignore this row when checking — used by the edit form. */
   exclude_id?:  string;
@@ -33,7 +35,8 @@ export interface CreateAdLeadPayload {
   on_duplicate?:  OnDuplicate;
   clinic_id?:     ClinicId;
   patient_name:   string;
-  platform:       AdLeadPlatform;
+  /** Optional — '' / omitted means "not specified". */
+  platform?:      AdLeadPlatform | '';
   campaign_name?: string | null;
   date_added:     string;
   booked?:        boolean;

@@ -121,30 +121,6 @@ function caseAcceptanceDiffFields(
   ]
 }
 
-/** Only the fields that actually changed — an edit request should ask the
- *  admin to approve the difference, not re-state the whole row. */
-function caseAcceptancePatchFrom(
-  existing: CaseAcceptanceDTO,
-  incoming: CaseAcceptanceValues
-): Record<string, unknown> {
-  const patch: Record<string, unknown> = {}
-  if ((incoming.front_staff_name || null) !== (existing.front_staff_name || null))
-    patch.front_staff_name = incoming.front_staff_name || null
-  if (incoming.treatment_plan_provided !== existing.treatment_plan_provided)
-    patch.treatment_plan_provided = incoming.treatment_plan_provided
-  if (incoming.case_recommendations !== existing.case_recommendations)
-    patch.case_recommendations = incoming.case_recommendations
-  if (incoming.appointments_booked !== existing.appointments_booked)
-    patch.appointments_booked = incoming.appointments_booked
-  if (incoming.prepay_offered  !== existing.prepay_offered)  patch.prepay_offered  = incoming.prepay_offered
-  if (incoming.prepay_accepted !== existing.prepay_accepted) patch.prepay_accepted = incoming.prepay_accepted
-  if ((incoming.transition_notes || null) !== (existing.transition_notes || null))
-    patch.transition_notes = incoming.transition_notes || null
-  if ((incoming.notes || null) !== (existing.notes || null))
-    patch.notes = incoming.notes || null
-  return patch
-}
-
 interface FormState {
   date_logged:              string
   clinic_id:                ClinicId | ''
@@ -473,21 +449,14 @@ export default function CaseAcceptanceEntryPage() {
   }, [pending])
 
   /**
-   * Show the duplicate dialog for an exact match and turn the answer into the
-   * next action:
-   *   'allow'     → POST it as a genuinely separate entry
-   *   'overwrite' → POST with on_duplicate=overwrite (ADMIN only here)
-   *   'handled'   → an edit request was filed instead; nothing left to do
-   *   null        → user backed out, save nothing
-   *
-   * Unlike dropouts, non-admins can never write over an existing case entry —
-   * every non-admin edit already goes through admin approval, and the
-   * duplicate guard must not become a way around that.
+   * Show the duplicate dialog for an exact match. The only outcomes are save it
+   * anyway as a second entry ('allow') or back out (null) — a duplicate never
+   * overwrites the saved row and never goes into the approval queue.
    */
   const resolveDuplicate = async (
     report:   DuplicateReport<CaseAcceptanceDTO>,
     incoming: CaseAcceptanceValues
-  ): Promise<'allow' | 'overwrite' | 'handled' | null> => {
+  ): Promise<'allow' | null> => {
     const existing = report.exact!
     const owner    = existing.entered_by_name || 'another user'
 
@@ -499,48 +468,13 @@ export default function CaseAcceptanceEntryPage() {
         CLINIC_LABEL[existing.clinic_id as ClinicId] ?? existing.clinic_id,
         existing.clinician_name,
       ].filter(Boolean).join('  ·  '),
-      existingMeta:  `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
-      fields:        caseAcceptanceDiffFields(existing, incoming),
-      primaryLabel:  report.can_overwrite ? 'Overwrite existing entry' : 'Send update for approval',
-      primaryNote:   report.can_overwrite
-        ? 'Overwriting replaces the saved values. The old ones stay in the audit log.'
-        : 'Changing a saved case entry always needs admin approval.',
-      separateLabel: 'Not a duplicate — save separately',
+      existingMeta: `Saved by ${owner} on ${new Date(existing.created_at).toLocaleString()}`,
+      fields:       caseAcceptanceDiffFields(existing, incoming),
+      saveLabel:    'Save anyway',
+      saveNote:     'Check the date and clinician before saving a second entry.',
     })
 
-    if (choice === 'cancel')   return null
-    if (choice === 'separate') return 'allow'
-    if (report.can_overwrite)  return 'overwrite'
-
-    // No direct write → file an edit request against the row that exists,
-    // rather than adding a second one.
-    const patch = caseAcceptancePatchFrom(existing, incoming)
-    if (Object.keys(patch).length === 0) {
-      toast.error('Nothing to change — your entry matches the saved one exactly')
-      return null
-    }
-
-    const reason = await promptDialog.ask({
-      title:        'Why should this entry be changed?',
-      message:      `Patient: ${existing.patient_name}\n\nThe admin reviews this together with your changes.`,
-      placeholder:  'e.g. Booked count was wrong — patient took 4 appointments',
-      confirmLabel: 'Submit for approval',
-    })
-    if (reason === null) return null
-
-    try {
-      await editRequestsApi.create({
-        entity_type: 'case_acceptance',
-        entity_id:   existing.id,
-        reason:      reason.trim() || 'Duplicate entry — corrected values',
-        patch,
-      })
-      toast.success('Edit request submitted — waiting for admin approval')
-      return 'handled'
-    } catch (e: any) {
-      toast.error(e.response?.data?.error?.message || 'Failed to submit edit request')
-      return null
-    }
+    return choice === 'save' ? 'allow' : null
   }
 
   const onSubmit = async () => {
@@ -607,9 +541,6 @@ export default function CaseAcceptanceEntryPage() {
       if (report?.exact) {
         const decision = await resolveDuplicate(report, incoming)
         if (decision === null) return
-        if (decision === 'handled') {
-          cancelEdit(); await load(); await reloadPendingEdits(); return
-        }
         onDuplicate = decision
       } else if (report && report.similar.length > 0) {
         // Tier 2: same patient at this clinic within two weeks, but a
@@ -735,7 +666,6 @@ export default function CaseAcceptanceEntryPage() {
           ...(picksClinic ? { clinic_id: form.clinic_id as ClinicId } : {}),
         }
 
-        let overwrote = onDuplicate === 'overwrite'
         try {
           await caseAcceptanceApi.create({
             ...payload,
@@ -749,16 +679,10 @@ export default function CaseAcceptanceEntryPage() {
 
           const decision = await resolveDuplicate(raced, incoming)
           if (decision === null) return
-          if (decision === 'handled') {
-            cancelEdit(); await load(); await reloadPendingEdits(); return
-          }
-          overwrote = decision === 'overwrite'
           await caseAcceptanceApi.create({ ...payload, on_duplicate: decision })
         }
 
-        toast.success(overwrote
-          ? `Overwrote the existing case entry for ${patientName}`
-          : `Added case entry for ${patientName}`)
+        toast.success(`Added case entry for ${patientName}`)
       }
       if (!editingId && draftId) {
         try { await draftsApi.remove(draftId) } catch { /* best-effort cleanup */ }
@@ -821,11 +745,28 @@ export default function CaseAcceptanceEntryPage() {
     }
   }
 
+  /**
+   * Who may EDIT a row. Front desk covers for each other, so any entry they can
+   * see is fair game — the list is already clinic-scoped server-side, and the
+   * edit still goes to the admin for approval (changed 2026-08-12).
+   */
   const isEditable = (row: CaseAcceptanceDTO) => {
     if (user.role === 'ADMIN') return true
+    if (isReceptionist) return true
     // Clinician can act on entries where they are the clinician on the record
     // (covers imports and entries made by front desk on their behalf),
     // OR entries they personally submitted.
+    if (user.role === 'CLINICIAN') return row.clinician_id === user.id || row.entered_by === user.id
+    return row.entered_by === user.id
+  }
+
+  /**
+   * Who may request a DELETE. Still your own entries only — deleting someone
+   * else's work was not part of opening up editing, and the backend enforces
+   * the same rule.
+   */
+  const canRequestDelete = (row: CaseAcceptanceDTO) => {
+    if (user.role === 'ADMIN') return true
     if (user.role === 'CLINICIAN') return row.clinician_id === user.id || row.entered_by === user.id
     return row.entered_by === user.id
   }
@@ -837,8 +778,10 @@ export default function CaseAcceptanceEntryPage() {
   return (
     <AppShell title="Daily Case Recommendation & Acceptance Tracker" hideNav>
       <div className="pw-page" style={{ padding: '20px 28px' }}>
+        {/* Front desk sees (and now edits) every entry in their clinic, so
+            "My Entries" would understate the list — same label as ADMIN. */}
         {useTabs && (
-          <SubTabs active={activeTab} total={total} entriesLabel={isAdmin ? 'All Entries' : 'My Entries'} onChange={setActiveTab} />
+          <SubTabs active={activeTab} total={total} entriesLabel={isAdmin || isReceptionist ? 'All Entries' : 'My Entries'} onChange={setActiveTab} />
         )}
         {/* Form card — create a new entry, or edit the row currently loaded */}
         {(!useTabs || activeTab === 'encode') && showCreateForm && (
@@ -1215,23 +1158,27 @@ export default function CaseAcceptanceEntryPage() {
                       <Td><span style={{ color: TEXT_SOFT }}>{r.transition_notes || <Dim>—</Dim>}</span></Td>
                       <Td><span style={{ color: TEXT_SOFT }}>{r.notes || <Dim>—</Dim>}</span></Td>
                       <Td align="right">
-                        {isEditable(r) ? (
+                        {isEditable(r) || canRequestDelete(r) ? (
                           <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', alignItems: 'center' }}>
-                            {isAdmin || !pendingEdits.has(r.id) ? (
-                              <ActionBtn
-                                label="Edit"
-                                variant={isAdmin ? 'primary' : 'outline'}
-                                onClick={() => startEdit(r)}
-                              />
-                            ) : (
-                              <StatusChip label="Edit pending" color="blue" title="Your edit is waiting for admin approval" />
+                            {isEditable(r) && (
+                              isAdmin || !pendingEdits.has(r.id) ? (
+                                <ActionBtn
+                                  label="Edit"
+                                  variant={isAdmin ? 'primary' : 'outline'}
+                                  onClick={() => startEdit(r)}
+                                />
+                              ) : (
+                                <StatusChip label="Edit pending" color="blue" title="Your edit is waiting for admin approval" />
+                              )
                             )}
-                            {isAdmin ? (
-                              <ActionBtn label="Delete" variant="danger" onClick={() => onDelete(r)} />
-                            ) : pendingDeletes.has(r.id) ? (
-                              <StatusChip label="Delete requested" color="amber" title="Waiting for admin approval" />
-                            ) : (
-                              <ActionBtn label="Request delete" variant="danger-ghost" onClick={() => onRequestDelete(r)} />
+                            {canRequestDelete(r) && (
+                              isAdmin ? (
+                                <ActionBtn label="Delete" variant="danger" onClick={() => onDelete(r)} />
+                              ) : pendingDeletes.has(r.id) ? (
+                                <StatusChip label="Delete requested" color="amber" title="Waiting for admin approval" />
+                              ) : (
+                                <ActionBtn label="Request delete" variant="danger-ghost" onClick={() => onRequestDelete(r)} />
+                              )
                             )}
                           </div>
                         ) : <Dim>—</Dim>}
@@ -1362,24 +1309,33 @@ function SummaryCards({ summary }: { summary: CaseAcceptanceSummary | null }) {
       value:     summary!.total.toLocaleString(),
       highlight: true,
     },
+    // Recs / Booked / Acceptance are all AVERAGES per entry, matching the Case
+    // Acceptance admin page. The raw totals stay visible in the sub-line.
     {
-      label: 'Recs',
-      value: summary!.totalRecommendations.toLocaleString(),
-      sub:   summary!.totalRecommendations > 0
-               ? `${pct(summary!.totalBooked, summary!.totalRecommendations)}% booked`
+      label: 'Recs (avg)',
+      value: summary!.total > 0
+               ? (summary!.totalRecommendations / summary!.total).toFixed(1)
+               : '—',
+      sub:   summary!.total > 0
+               ? `${summary!.totalRecommendations.toLocaleString()} total / ${summary!.total.toLocaleString()} entries`
                : '',
     },
     {
-      label: 'Booked',
-      value: summary!.totalBooked.toLocaleString(),
-      sub:   summary!.caseAcceptancePct !== null
-               ? `${summary!.caseAcceptancePct.toFixed(1)}% acceptance`
+      label: 'Booked (avg)',
+      value: summary!.total > 0
+               ? (summary!.totalBooked / summary!.total).toFixed(1)
+               : '—',
+      sub:   summary!.total > 0
+               ? `${summary!.totalBooked.toLocaleString()} total / ${summary!.total.toLocaleString()} entries`
                : '',
     },
+    // Mean of the per-entry ACCEPTANCE column, not sum-booked/sum-recs.
     {
-      label: 'Acceptance',
-      value: summary!.caseAcceptancePct === null ? '—' : `${summary!.caseAcceptancePct.toFixed(1)}%`,
-      sub:   `${summary!.totalBooked.toLocaleString()} / ${summary!.totalRecommendations.toLocaleString()}`,
+      label: 'Acceptance (avg)',
+      value: summary!.avgAcceptancePct === null ? '—' : `${summary!.avgAcceptancePct.toFixed(2)}%`,
+      sub:   summary!.avgAcceptancePct === null
+               ? ''
+               : `avg of ${summary!.entriesWithRecs.toLocaleString()} ${summary!.entriesWithRecs === 1 ? 'entry' : 'entries'}`,
     },
     {
       label: 'Prepay offered',
@@ -1395,9 +1351,9 @@ function SummaryCards({ summary }: { summary: CaseAcceptanceSummary | null }) {
     },
   ] : [
     { label: 'Entries',          value: '—', highlight: true },
-    { label: 'Recs',             value: '—' },
-    { label: 'Booked',           value: '—' },
-    { label: 'Acceptance',       value: '—' },
+    { label: 'Recs (avg)',       value: '—' },
+    { label: 'Booked (avg)',     value: '—' },
+    { label: 'Acceptance (avg)', value: '—' },
     { label: 'Prepay offered',   value: '—' },
     { label: 'Prepay accepted',  value: '—' },
   ]

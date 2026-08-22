@@ -19,18 +19,7 @@ export interface PagedAdLeads {
   pagination: { limit: number; offset: number; total: number; hasMore: boolean };
 }
 
-/**
- * Result of create(): the route needs to know whether a row was inserted or an
- * existing one replaced, to pick 201 vs 200 and the right audit action.
- */
-export interface CreateAdLeadResult {
-  row:      AdLeadDTO;
-  outcome:  'created' | 'overwritten';
-  /** The row as it looked BEFORE an overwrite — goes into the audit trail. */
-  replaced: AdLeadDTO | null;
-}
-
-/** Gate the whole feature: ADMIN + allow-listed front-desk logins only. */
+/** Gate the whole feature: ADMIN + all front desk + allow-listed extras. */
 function assertAdLeadsAccess(scope: RequestScope): void {
   if (!canAccessAdLeads(scope.role, scope.email)) {
     throw Errors.forbidden('You do not have access to the Meta/Google Leads section');
@@ -38,18 +27,11 @@ function assertAdLeadsAccess(scope: RequestScope): void {
 }
 
 /**
- * Who may overwrite an existing lead in place. Identical to the rule in
- * update(): ADMIN edits anything, everyone else only their own entries. When
- * this is false the UI offers the edit-request flow instead — the duplicate
- * guard must not become a way around the approval rules.
+ * FRONT_DESK is pinned to its own clinic; FRONT_DESK_GLOBAL / ADMIN / ADSPEND
+ * have no clinic pin (clinic_id is NULL on those accounts) and pick per entry.
  */
-function canOverwriteAdLead(scope: RequestScope, existing: AdLeadDTO): boolean {
-  return scope.role === 'ADMIN' || existing.entered_by === scope.userId;
-}
-
-/** FRONT_DESK is pinned to its own clinic; FRONT_DESK_GLOBAL / ADMIN pick. */
 function resolveClinicId(scope: RequestScope, requested?: string): string {
-  if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'ADMIN') {
+  if (scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'ADMIN' || scope.role === 'ADSPEND') {
     if (!requested) {
       throw Errors.validation('clinic_id is required — pick which clinic this lead is for');
     }
@@ -132,35 +114,33 @@ export const adLeadService = {
       {
         clinic_id:    clinicId,
         patient_name: input.patient_name,
-        platform:     input.platform,
+        platform:     input.platform ?? '',
         date_added:   input.date_added,
       },
       { excludeId: input.exclude_id }
     );
-    return {
-      exact,
-      similar,
-      can_overwrite: exact ? canOverwriteAdLead(scope, exact) : false,
-    };
+    return { exact, similar };
   },
 
-  async create(scope: RequestScope, input: CreateAdLeadBody): Promise<CreateAdLeadResult> {
+  async create(scope: RequestScope, input: CreateAdLeadBody): Promise<AdLeadDTO> {
     // Only the super admin and allow-listed front-desk logins encode leads.
     assertAdLeadsAccess(scope);
 
     const clinicId = resolveClinicId(scope, input.clinic_id);
+    // Platform Source is optional at entry — '' means "not specified".
+    const platform = input.platform ?? '';
 
     const key: AdLeadDupKey = {
       clinic_id:    clinicId,
       patient_name: input.patient_name,
-      platform:     input.platform,
+      platform,
       date_added:   input.date_added,
     };
     const onDuplicate: OnDuplicate = input.on_duplicate ?? 'reject';
 
     const values = {
       patient_name:  input.patient_name,
-      platform:      input.platform,
+      platform,
       campaign_name: input.campaign_name ?? null,
       date_added:    input.date_added,
       booked:        input.booked ?? false,
@@ -176,35 +156,18 @@ export const adLeadService = {
       await lockDuplicateKey(client, adLeadLockKey(key));
       const { exact, similar } = await adLeadRepository.findDuplicates(key, {}, client);
 
-      // 'allow' = the user saw the diff and confirmed it is a separate lead.
-      if (exact && onDuplicate !== 'allow') {
-        const canOverwrite = canOverwriteAdLead(scope, exact);
-
-        if (onDuplicate === 'reject') {
-          throw duplicateConflict<AdLeadDTO>('lead', {
-            exact, similar, can_overwrite: canOverwrite,
-          });
-        }
-
-        // onDuplicate === 'overwrite'
-        if (!canOverwrite) {
-          throw Errors.forbidden(
-            'That lead was logged by someone else — submit an edit request so an admin can approve the change'
-          );
-        }
-        await adLeadRepository.update(exact.id, values, scope.userId, client);
-
-        const updated = await adLeadRepository.findJoinedById(exact.id, client);
-        if (!updated) throw Errors.notFound(`Ad lead ${exact.id} not found`);
-        return { row: updated, outcome: 'overwritten' as const, replaced: exact };
+      // 409 so the UI can show the diff. 'allow' = the user saw that diff and
+      // chose to save anyway — always honoured, whatever the role. Nothing here
+      // can edit an existing lead, so this is not a way around update().
+      if (exact && onDuplicate === 'reject') {
+        throw duplicateConflict<AdLeadDTO>('lead', { exact, similar });
       }
 
-      const created = await adLeadRepository.create({
+      return adLeadRepository.create({
         clinic_id:  clinicId,
         entered_by: scope.userId,
         ...values,
       }, client);
-      return { row: created, outcome: 'created' as const, replaced: null };
     });
   },
 
@@ -212,6 +175,16 @@ export const adLeadService = {
     assertAdLeadsAccess(scope);
     const existing = await adLeadRepository.findRawById(id);
     if (!existing) throw Errors.notFound(`Ad lead ${id} not found`);
+
+    // The ad-spend encoder may edit leads (2026-08-12) but never writes
+    // directly — every one of its corrections goes through admin approval, so
+    // the direct PATCH stays shut even for its own rows. Checked before the
+    // ownership rule below, which would otherwise let it through.
+    if (scope.role === 'ADSPEND') {
+      throw Errors.forbidden(
+        'Your edits need admin approval — submit an edit request instead'
+      );
+    }
 
     // ADMIN edits any; everyone else only their own entries.
     if (scope.role !== 'ADMIN' && existing.entered_by !== scope.userId) {

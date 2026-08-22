@@ -32,7 +32,7 @@
 - Snapshot caching (Postgres, ~60 min/4 hr TTL) — di na uulit kumuha sa Nookal; may `?refresh=1` force option
 - Print-optimized (A4 landscape, repeated header, page breaks)
 - **Metrics displayed (weekly + monthly):**
-  - **Finance:** Total Revenue, Product Sales Revenue, Upfront Revenue (account credits), Cash from Insurance (Health Fund / Medicare / DVA), Ageing Debts (10-year rolling outstanding invoices)
+  - **Finance:** Total Revenue, Product Sales Revenue, Upfront Revenue (account credits), Cash from Insurance (Health Fund / Medicare / DVA), Ageing Debts (hand-typed kada week column; ang Monthly Actual ay sum — tingnan ang §14)
   - **Marketing:** New Opt-ins, New Patients, Patient Reactivations, Ad Spend, Cost Per Patient
   - **Sales/Ops:** Total Patients, Appointments Attended, Show-Up Rate %, Cancelled (no rebook), Cancelled & Rebooked, Cancellation %, No Shows, Case Acceptance %, Upfront Plan Accepted, Products Upsold, Complementary Transitions, Active/Inactive Patients
 
@@ -117,7 +117,7 @@
 - Health check endpoint (`GET /api/health`)
 
 ## 12. Duplicate Guard (Dropouts · Case Acceptance · Ad Leads)
-Pumipigil sa dobleng entry ng parehong bagay, pero hindi bumabara sa mga tunay na hindi duplicate.
+Nagbabala kapag mukhang nadoble ang entry — pero **hindi bumabara**. Laging kayang i-save ng encoder ang entry niya.
 
 **Natural key** (pareho lahat = duplicate). Ang pangalan ay ni-no-normalize muna: lowercase, trim, at ini-isa ang sunod-sunod na space — kaya `"cedric  ADAMS "` = `"Cedric Adams"`.
 | Form | Key |
@@ -126,20 +126,48 @@ Pumipigil sa dobleng entry ng parehong bagay, pero hindi bumabara sa mga tunay n
 | Case Acceptance | clinic + clinician + patient + `date_logged` |
 | Ad Leads | clinic + patient + **platform** + `date_added` (magkaibang platform sa parehong araw = dalawang tunay na lead) |
 
-**Dalawang tier**
-- **Exact** — pareho ang natural key → lalabas ang **Duplicate dialog** na may field-by-field diff (existing vs. bagong tina-type), tapos 3 pagpipilian: **Overwrite** · **Hindi duplicate — save separately** · **Cancel**. Cancel ang default (Esc / click sa labas); walang Enter shortcut para hindi masagi ang overwrite.
-- **Similar** — parehong patient sa parehong clinic sa loob ng ±14 araw pero ibang clinician/date/platform → babala lang, hindi bumabara (kadalasan mali lang ang na-type na petsa).
+**Dalawang tier — pareho, babala lang**
+- **Exact** — pareho ang natural key → lalabas ang **Duplicate dialog** na may field-by-field diff (existing vs. bagong tina-type), tapos 2 pagpipilian lang: **Save anyway** (nagda-dagdag ng pangalawang entry, hindi ginagalaw ang naunang row) · **Cancel**. Cancel ang default (Esc / click sa labas); walang Enter shortcut para mabasa muna ang diff.
+- **Similar** — parehong patient sa parehong clinic sa loob ng ±14 araw pero ibang clinician/date/platform → babala lang din. Kasama rito ang **parehong patient sa ibang appointment date** — normal iyon, kaya hindi kailanman hinaharangan.
 
-**Sino ang pwedeng mag-overwrite** — walang binabagong permission rule:
-| Form | Overwrite nang diretso | Kapag hindi pwede |
-|------|------------------------|-------------------|
-| Dropouts | ADMIN, o kung sarili mong entry | Awtomatikong nagiging **edit request** (kailangan ng admin approval) |
-| Case Acceptance | ADMIN lang | Laging edit request |
-| Ad Leads | ADMIN, o kung sarili mong entry | Edit request |
+**Walang overwrite, walang approval** (binago 2026-08-12) — dating pwedeng ipatong ang bagong entry sa luma, at kapag hindi ikaw ang nag-encode ay napupunta iyon sa **edit-request approval queue** sa gitna mismo ng pag-eencode. Tinanggal na iyon nang tuluyan: walang role — pati ADMIN — ang makakapag-overwrite mula sa duplicate dialog, at walang entry ang napupunta sa review dahil lang duplicate. Kung mali ang naunang row, i-edit iyon nang hiwalay mula sa listahan (doon pa rin nananatili ang dating approval rules).
 
-**Ligtas sa double-click / sabay na encoder** — hindi lang client-side check ito. Ang totoong check ay nasa server sa loob ng isang transaction na may `pg_advisory_xact_lock()` sa natural key, kaya dalawang sabay na POST ay hindi pwedeng parehong makalusot. Ang pre-flight check sa browser ay para sa UI lang; kapag may nakaunang mag-save sa pagitan ng check at ng save, 409 ang isasagot ng server (kasama ang existing row) at lalabas ulit ang parehong dialog.
+**Ligtas pa rin sa double-click / sabay na encoder** — hindi lang client-side check ito. Ang totoong check ay nasa server sa loob ng isang transaction na may `pg_advisory_xact_lock()` sa natural key. Ang pre-flight check sa browser ay para sa UI lang; kapag may nakaunang mag-save sa pagitan ng check at ng save, 409 ang isasagot ng server (kasama ang existing row) at lalabas ulit ang parehong dialog.
 
-Walang UNIQUE constraint sa DB — sadya, dahil pinapayagan ang "hindi naman talaga duplicate". Bawat overwrite ay may `*.overwrite` na audit-log entry kasama ang **before** at **after** values, kaya nababawi ang naipatong.
+Walang UNIQUE constraint sa DB — sadya, dahil pinapayagan ang "hindi naman talaga duplicate". Laging `*.create` ang audit-log entry ngayon; wala nang `*.overwrite` dahil wala nang path na bumubura ng dating values.
+
+## 13. Sino ang pwedeng mag-edit / mag-delete ng entry
+Ang **nakikita** mo ay clinic-scoped na dati pa: FRONT_DESK = sariling clinic, FRONT_DESK_GLOBAL = lahat, CLINICIAN = mga entry kung saan siya ang naka-tag, ADMIN = lahat.
+
+| Role | Edit | Delete |
+|------|------|--------|
+| ADMIN | Diretso, lahat | Diretso, lahat |
+| FRONT_DESK / FRONT_DESK_GLOBAL | **Kahit sinong entry na nakikita nila** — dumadaan sa **admin approval** (edit request) | Sariling entry lang, dumadaan sa approval |
+| CLINICIAN | Sariling entry lang, dumadaan sa approval | Sariling entry lang, dumadaan sa approval |
+| ADSPEND (ad leads lang) | **Kahit anong lead** — dumadaan sa admin approval | **Wala** |
+
+**Binago 2026-08-12** (hiling ni Sam: "make it so all frontstaff can edit each others entries") — dati, "sarili mong entry lang" ang panuntunan sa Dropouts + Case Acceptance, kaya hindi maituwid ng kasamahan ang maling na-encode ng kapwa front staff. Ngayon, **nakikita = pwedeng ituwid**. Ang mga hindi ginalaw:
+- **Approval**: nananatili — dumadaan pa rin sa Edit Requests queue ng admin (desisyon noong 2026-08-06).
+- **Delete**: sariling entry pa rin — ang binuksan ay pag-eedit, hindi pagbura.
+- **CLINICIAN**: walang pagbabago.
+
+Kapag may kapwa front staff na may naka-pending nang edit sa parehong row, 409 ang isasagot ng server (*"An edit request for this entry is already pending admin approval"*) — hindi nagse-stack ang dalawang request sa iisang entry.
+
+### Ad Leads: adspend@ (binago rin 2026-08-12)
+Shared team inbox ang ad leads — kung nakikita mo, pwede mo nang ituwid, kahit hindi ikaw ang nag-encode. Dati **hindi kasama** ang `adspend@` dito (add + view lang siya). Ngayon, hiling ni Sam ("puwede rin dapat siya mag edit dito, pero may permission din pareho sa iba"), **pwede na siyang mag-edit ng kahit anong lead — pero laging dumadaan sa approval mo**, kahit sariling lead niya (walang diretsong PATCH ang account na iyon).
+
+Ang natitirang hangganan ng `adspend@`: **hindi pa rin siya makakabura** ng lead — walang Delete at walang delete request. Nawala na ang dating "add-only" na konsepto: lahat ng nakakapasok sa section ay pwedeng mag-add at mag-edit; ang tanging natitirang tanong ay kung pwede bang mag-delete (`canRemoveAdLead()` sa `roles.ts`, naka-mirror sa frontend `types.ts` — palitan ang dalawa nang sabay).
+
+## 14. Ageing Debts — manual entry kada week (migrations 027 + 028)
+Hand-typed ang Ageing Debts sa CEO dashboard, hindi hinihila sa Nookal. **Binago 2026-08-12:** dati isang box lang sa ilalim ng Monthly Actual; ngayon **may box na ang bawat week column**, at ang **Monthly Actual ay automatic na sum** ng mga napunang linggo.
+
+- **Kada clinic + buwan + week column** ang storage (`ageing_debts_manual_week`). Ang `week_num` ay **posisyon ng column** (1-based), hindi ISO week — Week 1–4 plus Remainder ang grid, at para sa ilang buwan galing pa iyon sa mga transcribed na range ni Cath (`week.calculator.ts`).
+- **Blangko ≠ zero.** Walang row = "—" (hindi pa naila-lagay). Naka-type na `0` = totoong wala nang utang. Kapag binura mo ang laman ng box, mabubura ang row para sa linggong iyon.
+- **Read-only na ang Monthly Actual.** Sum na lang ito ng mga week — walang tinatype doon.
+- **`overall`** ay hiwalay pa rin na tina-type, HINDI sinusuma mula sa tatlong clinic — pareho pa rin ng dahilan sa migration 027.
+- **Ang mga lumang buwan ay hindi nawawala.** Kung walang week row ang isang buwan, ipapakita pa rin ang dating buwanang halaga mula sa migration 027 (may paalala sa definition column). Sa sandaling mag-type ka ng kahit isang week doon, buburahin ang lumang buwanang row para hindi magkaroon ng dalawang pinagmumulan ang iisang buwan.
+
+> **Babala tungkol sa kahulugan:** balance ang Ageing Debts (kung magkano ang nakabinbin sa isang punto), at ang pagsuma ng balance sa apat-limang linggo ay lumalabas na mas malaki kaysa totoo. Ipinaliwanag ito kay Sam noong 2026-08-12 at **sum pa rin ang pinili niya** — kaya ang numerong tina-type kada linggo ay basahin bilang "utang na para sa linggong iyon", hindi running total. Huwag itong basta ibalik sa last-week-wins.
 
 ---
 

@@ -96,6 +96,7 @@ export default function CaseAcceptanceAdminPage() {
 
   const [summary, setSummary] = useState<CaseAcceptanceSummary>({
     total: 0, totalRecommendations: 0, totalBooked: 0, caseAcceptancePct: null,
+    avgAcceptancePct: null, entriesWithRecs: 0,
     tpProvided: 0, tpNotProvided: 0,
     prepayOffered: 0, prepayAccepted: 0, transitions: 0, byClinic: {},
   })
@@ -215,20 +216,28 @@ export default function CaseAcceptanceAdminPage() {
           marginBottom: 16,
         }}>
           <SummaryCard label="Entries" value={summary.total} highlight />
+          {/* Recs shows the AVERAGE per entry (not the sum) — the total still
+              shows in the sub-line so the raw number isn't lost. */}
           <SummaryCard
-            label="Recs"
-            value={summary.totalRecommendations}
-            sub={summary.totalRecommendations > 0 ? `${pct(summary.totalBooked, summary.totalRecommendations)}% booked` : ''}
+            label="Recs (avg)"
+            value={summary.total > 0 ? (summary.totalRecommendations / summary.total).toFixed(1) : '—'}
+            sub={summary.total > 0 ? `${summary.totalRecommendations} total / ${summary.total} entries` : ''}
           />
+          {/* Booked mirrors Recs: average per entry up top, raw total below. */}
           <SummaryCard
-            label="Booked"
-            value={summary.totalBooked}
-            sub={summary.caseAcceptancePct !== null ? `${summary.caseAcceptancePct.toFixed(1)}% acceptance` : ''}
+            label="Booked (avg)"
+            value={summary.total > 0 ? (summary.totalBooked / summary.total).toFixed(1) : '—'}
+            sub={summary.total > 0 ? `${summary.totalBooked} total / ${summary.total} entries` : ''}
           />
+          {/* The MEAN of the ACCEPTANCE column below, not sum-booked/sum-recs —
+              every entry weighs the same, so 4 rows of 66.67/50/50/100 read
+              66.67% here (the weighted figure would say 71.4%). */}
           <SummaryCard
-            label="Acceptance"
-            value={summary.caseAcceptancePct === null ? '—' : `${summary.caseAcceptancePct.toFixed(1)}%`}
-            sub={`${summary.totalBooked} / ${summary.totalRecommendations}`}
+            label="Acceptance (avg)"
+            value={summary.avgAcceptancePct === null ? '—' : `${summary.avgAcceptancePct.toFixed(2)}%`}
+            sub={summary.avgAcceptancePct === null
+              ? ''
+              : `avg of ${summary.entriesWithRecs} ${summary.entriesWithRecs === 1 ? 'entry' : 'entries'}`}
           />
           <SummaryCard
             label="Prepay offered"

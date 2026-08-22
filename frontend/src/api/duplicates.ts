@@ -3,16 +3,19 @@
  * backend/src/shared/duplicates.ts.
  */
 
-/** What the server should do when the natural key already exists. */
-export type OnDuplicate = 'reject' | 'overwrite' | 'allow'
+/**
+ * What the server should do when the natural key already exists: 'reject'
+ * (409 with the diff) or 'allow' (save it as a second row). There is no
+ * overwrite — the duplicate guard warns, it never edits and never sends an
+ * entry into the approval queue.
+ */
+export type OnDuplicate = 'reject' | 'allow'
 
 export interface DuplicateReport<T> {
   /** Same natural key — a real duplicate, or null if there is none. */
-  exact:         T | null
+  exact:   T | null
   /** Same patient nearby in time on a different key. Advisory only. */
-  similar:       T[]
-  /** Whether THIS user may overwrite `exact` directly. False → edit-request. */
-  can_overwrite: boolean
+  similar: T[]
 }
 
 /**
@@ -28,8 +31,7 @@ export function duplicateReportFromError<T>(e: any): DuplicateReport<T> | null {
   const details = e?.response?.data?.error?.details
   if (!details || details.kind !== 'duplicate' || !details.exact) return null
   return {
-    exact:         details.exact as T,
-    similar:       (details.similar ?? []) as T[],
-    can_overwrite: !!details.can_overwrite,
+    exact:   details.exact as T,
+    similar: (details.similar ?? []) as T[],
   }
 }

@@ -13,22 +13,55 @@ export const ROLES = {
 
 export type Role = typeof ROLES[keyof typeof ROLES];
 
-// Front-desk accounts allowed into the Meta/Google Leads (ad-leads) section.
-// It is NOT a role — only these specific logins may encode/view leads; every
-// other front-desk account has no access at all. Mirrored in frontend types.ts.
-export const AD_LEADS_ENCODER_EMAILS: readonly string[] = [
-  'bella@physioward.com.au',
+// ── Meta/Google Leads (ad-leads) access ──────────────────────────────────────
+// Two separate questions, and they must not be conflated:
+//   1. canAccessAdLeads — may this login open the section at all?
+//   2. canRemoveAdLead  — once in, may it also DELETE?
+// Both mirrored in frontend types.ts. Access history for this section:
+//   2026-07-22 all front desk → 2026-07-24 bella@ ONLY → 2026-08-12 back to all
+//   front desk, on the same rules bella@ had. Later the same day Sam also gave
+//   the ad-spend encoder editing rights, which retired the "add-only" idea:
+//   everyone who can open the section can now add AND edit.
+//
+// Logins OUTSIDE the front-desk roles that are still allowed in. Front desk is
+// covered by role, so this list is only for the odd one out.
+export const AD_LEADS_EXTRA_EMAILS: readonly string[] = [
+  // The ad-spend encoder: leads and spend come off the same campaigns.
+  'adspend@physioward.com.au',
 ];
 
 /**
- * Who may touch the Meta/Google Leads section. ADMIN always can (read-only
- * admin view); front-desk logins only if explicitly allow-listed above.
- * Everyone else (CLINICIAN, ADSPEND, non-listed front desk) is denied.
+ * Who may open the Meta/Google Leads section. ADMIN always can; every
+ * front-desk login can (Sam re-opened it to the whole team 2026-08-12); anyone
+ * else only via AD_LEADS_EXTRA_EMAILS. CLINICIAN is denied.
  */
 export function canAccessAdLeads(role: Role, email: string | null | undefined): boolean {
   if (role === 'ADMIN') return true;
-  if (role !== 'FRONT_DESK' && role !== 'FRONT_DESK_GLOBAL') return false;
-  return !!email && AD_LEADS_ENCODER_EMAILS.includes(email.toLowerCase());
+  if (role === 'FRONT_DESK' || role === 'FRONT_DESK_GLOBAL') return true;
+  return !!email && AD_LEADS_EXTRA_EMAILS.includes(email.toLowerCase());
+}
+
+/**
+ * Who may REMOVE a lead — directly for ADMIN, through a delete request for the
+ * front desk. The ad-spend encoder is excluded: Sam gave it editing rights on
+ * 2026-08-12 ("puwede rin dapat siya mag edit… pero may permission din pareho
+ * sa iba") but not the ability to take a colleague's lead off the board.
+ *
+ * Must be checked in delete-request.service too — that flow deletes via the
+ * repository and so bypasses ad-leads.service.delete().
+ */
+export function canRemoveAdLead(role: Role): boolean {
+  return role === 'ADMIN' || role === 'FRONT_DESK' || role === 'FRONT_DESK_GLOBAL';
+}
+
+/**
+ * Which logins see every clinic's leads. FRONT_DESK is pinned to its own clinic;
+ * everyone else in this section has `clinic_id` NULL and sees the lot. Mirrors
+ * applyScope() in ad-leads.repository — keep the two in step, because the
+ * edit/delete request flows use this to decide "can you touch this lead".
+ */
+export function seesAllAdLeadClinics(role: Role): boolean {
+  return role === 'ADMIN' || role === 'FRONT_DESK_GLOBAL' || role === 'ADSPEND';
 }
 
 export const ROLE_VALUES: readonly Role[] =
@@ -63,8 +96,10 @@ export const FRONT_STAFF_NAMES = [
   'Ann Maree',
   'Bella',
   'Brooke',
+  'Catherine',
   'Holly',
   'Jenny',
+  'Lisa Miller',
   'Tanya',
   'Tilly',
   'Vanessa',
@@ -103,6 +138,10 @@ export const AD_LEAD_PLATFORMS = [
   'Google Ads',
   'FB Paid Ad Quiz',
   "FB Over 40's Landing Page Ad",
+  // Added 2026-08-16: the importer had already brought this one in from the
+  // sheet, but it was missing here — so it could not be picked or filtered,
+  // and editing such a lead silently relabelled it as the first option.
+  'Facebook NEW Landing Ad',
 ] as const;
 export type AdLeadPlatform = typeof AD_LEAD_PLATFORMS[number];
 

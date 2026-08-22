@@ -68,7 +68,12 @@ export interface CaseAcceptanceSummary {
   total:                number;
   totalRecommendations: number;
   totalBooked:          number;
+  /** Weighted: sum(booked) / sum(recs). */
   caseAcceptancePct:    number | null;
+  /** Mean of the per-entry ACCEPTANCE column — each entry counts once. */
+  avgAcceptancePct:     number | null;
+  /** Entries with recs > 0 — the mean's denominator. */
+  entriesWithRecs:      number;
   tpProvided:           number;
   tpNotProvided:        number;
   prepayOffered:        number;

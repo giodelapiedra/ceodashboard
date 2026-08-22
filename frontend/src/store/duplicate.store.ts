@@ -9,7 +9,13 @@ export interface DuplicateField {
   incoming: string
 }
 
-export type DuplicateChoice = 'overwrite' | 'separate' | 'cancel'
+/**
+ * The dialog only ever warns: save the new entry alongside the existing one, or
+ * back out. Overwriting was removed on 2026-08-12 — it dragged non-admins into
+ * the edit-request queue in the middle of an entry, and staff legitimately need
+ * to log the same patient more than once.
+ */
+export type DuplicateChoice = 'save' | 'cancel'
 
 export interface DuplicateOptions {
   /** e.g. 'This dropout entry is already logged' */
@@ -20,14 +26,10 @@ export interface DuplicateOptions {
   existingMeta: string
   /** Diff rows. Unchanged fields are rendered dimmed, changed ones highlighted. */
   fields:       DuplicateField[]
-  /** Primary button text — 'Overwrite existing entry' or, when the user
-   *  cannot write directly, 'Send update for admin approval'. */
-  primaryLabel: string
-  /** Optional caption under the buttons explaining what the primary does. */
-  primaryNote?: string
-  /** Text for the escape hatch. Omit to hide it (never for these three forms —
-   *  every one of them has a legitimate "same patient twice" case). */
-  separateLabel?: string
+  /** Primary button text. Defaults to 'Save anyway'. */
+  saveLabel?:   string
+  /** Optional caption beside the buttons. */
+  saveNote?:    string
 }
 
 interface DuplicateRequest extends DuplicateOptions {

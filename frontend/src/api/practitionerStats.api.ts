@@ -10,6 +10,12 @@ export interface Metric {
   manual?: boolean;
   /** Why the cell is blank, or a warning about the value in it. */
   note?: string;
+  /**
+   * Neutral working behind the figure — the hours behind a synced occupancy, for
+   * instance. Kept apart from `note` because the table paints anything with a
+   * note as a warning, and this is not one.
+   */
+  detail?: string;
 }
 
 export interface SyncResult {
@@ -25,6 +31,10 @@ export interface SyncResult {
   };
   /** Providers in the feed with no mapped user — their appointments were skipped. */
   unmappedProviderIds: number[];
+
+  /** Practitioner-weeks still without an Occupancy. Sync cannot produce one —
+   *  it comes from the Nookal Occupancy report export, or by hand. */
+  occupancyNeedsImport: number;
 }
 
 /** One practitioner-week of hand-read Nookal figures. */
@@ -56,8 +66,10 @@ export interface PractitionerWeekStats {
   cancellations: number;
   churns:        number;
 
-  /** Hand-entered — no Nookal API path exists to these. */
+  /** From Sync (migration 026), hand-correctable. */
   totalAppts: Metric;
+  /** Imported from Nookal's own Occupancy report, or hand-entered. Never from
+   *  Sync — blank until one of those happens. */
   occupancy:  Metric;
   newCases:   Metric;
   /** Computed from the entered Total Appts. */
@@ -82,6 +94,26 @@ export interface PractitionerStatsReport {
   clinicId: string | null;
   weeks:    PractitionerStatsWeek[];
   notes:    string[];
+}
+
+export interface OccupancyScrapeResult {
+  written: number;
+  keptManual: number;
+  skippedIdle: number;
+  unmatched: string[];
+  scraped: number;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export interface OccupancySyncResponse {
+  success: boolean;
+  results: OccupancyScrapeResult[];
+}
+
+export interface OccupancyStatusResponse {
+  configured: boolean;
+  message: string;
 }
 
 export const practitionerStatsApi = {
@@ -111,13 +143,46 @@ export const practitionerStatsApi = {
 
   /**
    * Pull a month of Nookal appointments and fill Total Appts, NC and the
-   * cancelled count for every mapped practitioner. Occupancy is untouched —
-   * Nookal has no working-hours figure, so a hand-entered value survives.
+   * cancelled count for every mapped practitioner.
+   *
+   * Occupancy is NOT touched. Nookal divides it by rostered hours, which the API
+   * does not expose, so it arrives via the Occupancy-report import or by hand.
+   * The result reports how many weeks are still waiting for one.
    */
   async sync(year: number, month: number): Promise<SyncResult> {
     const { data } = await api.post<SyncResult>('/api/practitioner-stats/sync', null, {
       params: { year, month },
     });
+    return data;
+  },
+
+  /**
+   * Check if Nookal web credentials are configured for browser-based occupancy sync.
+   */
+  async getOccupancyStatus(): Promise<OccupancyStatusResponse> {
+    const { data } = await api.get<OccupancyStatusResponse>('/api/practitioner-stats/occupancy-status');
+    return data;
+  },
+
+  /**
+   * Sync occupancy from the Nookal web report via browser automation.
+   * This scrapes the exact figures Nookal displays on the Occupancy report page.
+   *
+   * Takes 30-60 seconds per week due to browser automation.
+   *
+   * @param year  - Year to sync
+   * @param month - Month to sync (1-12)
+   * @param week  - Optional: specific week number (1-5). If omitted, syncs all weeks.
+   */
+  async syncOccupancy(year: number, month: number, week?: number): Promise<OccupancySyncResponse> {
+    const { data } = await api.post<OccupancySyncResponse>(
+      '/api/practitioner-stats/sync-occupancy',
+      null,
+      { 
+        params: { year, month, ...(week !== undefined ? { week } : {}) },
+        timeout: 300000, // 5 minutes - browser automation is slow
+      }
+    );
     return data;
   },
 };

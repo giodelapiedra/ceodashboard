@@ -34,6 +34,7 @@ import { pool, query, withTransaction } from './pool';
 import { env } from '../config/env';
 import { userRepository } from '../repositories/user.repository';
 import { isClinicId } from '../shared/roles';
+import { patientNameProblem } from '../shared/patient-name';
 
 interface ClinicConfig {
   sheetId:  string;
@@ -176,6 +177,16 @@ export async function run(): Promise<void> {
     const r    = allRows[i];
     const name = cell(r, 0);
     if (!name || name.toLowerCase() === 'prospective patient name') continue;
+
+    // The name cell is taken verbatim, so a date pasted into it used to sail
+    // through: lead 738 arrived as "Aug 11, 2026" (column 3's format), stayed
+    // unmatchable in Nookal forever, and quietly contributed $0 to the Leads
+    // Paid vs Spend card. Skip and name the row so the sheet gets fixed.
+    const nameProblem = patientNameProblem(name);
+    if (nameProblem) {
+      skipped.push({ row: i + 1, reason: nameProblem });
+      continue;
+    }
 
     let date_added = parseSheetDate(cell(r, 3));
     if (!date_added) {

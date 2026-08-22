@@ -307,26 +307,14 @@ router.post('/check-duplicate', async (req: AuthRequest, res: Response, next: Ne
   } catch (err) { next(err); }
 });
 
-// POST /api/case-acceptance
-// 201 on insert; 200 when the caller asked to overwrite an existing entry
-// (nothing new was created, so 201 would be a lie).
+// POST /api/case-acceptance — always an insert. A duplicate either 409s (so the
+// form can show the diff) or, with on_duplicate:'allow', is saved as a second row.
 router.post('/', async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const body   = createCaseAcceptanceSchema.parse(req.body);
-    const { row, outcome, replaced } = await caseAcceptanceService.create(req.scope!, body);
-
-    if (outcome === 'overwritten') {
-      // Keep the pre-overwrite values — an overwrite is the one path in this
-      // feature that destroys data, so the audit trail has to be able to
-      // reconstruct it.
-      await audit(req.scope!.userId, 'case_acceptance.overwrite', {
-        id: row.id, clinic_id: row.clinic_id, before: replaced, after: row,
-      });
-      res.status(200).json(row);
-    } else {
-      await audit(req.scope!.userId, 'case_acceptance.create', { id: row.id, clinic_id: row.clinic_id });
-      res.status(201).json(row);
-    }
+    const body = createCaseAcceptanceSchema.parse(req.body);
+    const row  = await caseAcceptanceService.create(req.scope!, body);
+    await audit(req.scope!.userId, 'case_acceptance.create', { id: row.id, clinic_id: row.clinic_id });
+    res.status(201).json(row);
   } catch (err) { next(err); }
 });
 

@@ -5,6 +5,7 @@ import {
   PractitionerWeekStats,
   Metric,
   Zone,
+  OccupancySyncResponse,
 } from '../../api/practitionerStats.api'
 import { toast } from '../../store/toast.store'
 import { ClinicId, CLINIC_LABEL } from '../../types'
@@ -64,7 +65,9 @@ const MONTHS = [
  * Columns this report ADDS come last, after a divider, so nothing the CEO
  * already reads shifts position.
  */
-/** The three figures with no Nookal API path — typed in, so also editable. */
+/** The three figures a person can type in. All three are filled by Sync too;
+ *  editing exists to correct one, and to supply an Occupancy for a week Nookal
+ *  could not measure. */
 type ManualField = 'total_appts' | 'occupancy_pct' | 'new_cases'
 
 /**
@@ -79,7 +82,7 @@ const BANDS: Record<Band, { label: string; tint: string; ink: string }> = {
   // and a saturated band would compete with them.
   volume:    { label: 'Volume',      tint: '#eff4f8', ink: '#5b6b7a' },
   clinical:  { label: 'Clinical',    tint: '#f0faf7', ink: '#0f6e56' },
-  retention: { label: 'Retention',   tint: '#fdf3f4', ink: '#9c3f4c' },
+  retention: { label: '',            tint: '#fdf3f4', ink: '#9c3f4c' },
   prepay:    { label: 'Prepay',      tint: '#f8f5ee', ink: '#8a7333' },
   added:     { label: 'Added here',  tint: '#f5f5f7', ink: '#6b7280' },
 }
@@ -96,7 +99,7 @@ const COLUMNS: Col[] = [
     title: 'Hand-read: Nookal → Reports → Providers & Practice → Completed Consults (SOP steps 7-11). All locations. Also the denominator for Cancellation %.',
     get: (r) => r.totalAppts },
   { band: 'volume',    kind: 'manual', label: 'Occupancy', field: 'occupancy_pct', suffix: '%',
-    title: 'Hand-read: Nookal → Reports → Occupancy (SOP steps 15-18). Target >80%. Over 100% means the roster hours in Nookal are wrong.',
+    title: 'Target >80%. The exact Nookal figure: Occupied ÷ Scheduled Minutes, off Nookal → Reports → Occupancy (date range = this week, Locations = All Locations, Export), loaded with db:import:occupancy. Sync does NOT fill this — the rostered hours Nookal divides by are absent from its API, and the diary-derived substitute ran up to 23 points high and put 5 of 11 practitioners in the wrong zone, so a blank is shown instead. Hover a cell for the hours behind the number. Typing one by hand beats the import and survives everything.',
     get: (r) => r.occupancy },
   { band: 'volume',    kind: 'manual', label: 'NC', field: 'new_cases',
     title: 'Hand-read: same Providers & Practice report → New Cases (SOP steps 12-14).',
@@ -111,7 +114,7 @@ const COLUMNS: Col[] = [
     title: 'Pooled: sum booked ÷ sum recommendations, per the KPI dictionary. Target >80%. The sheet averages per-patient percentages instead and can differ by 17 points.',
     get: (r) => r.caseAcceptance },
   { band: 'retention', kind: 'metric', label: 'Cancellation %', suffix: '%',
-    title: 'Computed: cancellation events ÷ Total Appts. Target <10%. Replaces SOP steps 30-39 — the ten Nookal Cancellation reports and the manual NFB cross-check.',
+    title: 'Computed: patients left with no future booking ÷ Total Appts. Target <10%. Counts "No Future Bookings" + "Cancelled - not rescheduled", per patient rather than per cancelled appointment. A completed treatment plan is NOT counted — the patient finished their care. A reschedule is not counted either — the booking still exists. Replaces SOP steps 30-39: the ten Nookal Cancellation reports and the manual NFB cross-check.',
     get: (r) => r.cancellationPct },
   { band: 'prepay',    kind: 'metric', label: 'Prepay %', suffix: '%',
     title: 'Prepay offered ÷ initial consults. Target 100%. The sheet divides by NC, which is how it produced 125%. No zone band — the KPI dictionary defines none.',
@@ -131,7 +134,7 @@ const COLUMNS: Col[] = [
     title: 'ADDED: cancellation events, per cancelled appointment date. One entry with three cancelled dates is three events.',
     get: (r) => r.cancellations },
   { band: 'added',     kind: 'count', label: 'Churns',
-    title: 'ADDED: churns per patient, on their last cancelled date. A reschedule keeps a future booking, so it is not a churn.',
+    title: 'ADDED: churns per patient, on their last cancelled date. A reschedule keeps a future booking, so it is not a churn. Runs slightly HIGHER than the Cancellation % numerator: this also counts completed treatment plans, which Cancellation % deliberately leaves out.',
     get: (r) => r.churns },
 ]
 
@@ -180,13 +183,16 @@ function ZoneCell({ m, suffix = '', extra }: { m: Metric; suffix?: string; extra
   // A real figure the KPI dictionary sets no target band for (the prepay rates).
   // Render the number plainly — never swallow it just because there is no zone.
   if (!m.zone) {
-    return <td style={{ ...cellBase, ...extra }}>{fmt(m, suffix)}</td>
+    return <td style={{ ...cellBase, ...extra }} title={m.detail}>{fmt(m, suffix)}</td>
   }
   const z = ZONE[m.zone]
+  // The zone label alone ("Thriving") says nothing about where the number came
+  // from. Where a metric carries its working — synced occupancy does — put that
+  // in front of the label, so the hours are one hover away from the percentage.
   return (
     <td style={{ ...cellBase, ...extra }}>
       <span
-        title={z.label}
+        title={m.detail ? `${m.detail} — ${z.label}` : z.label}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5,
           background: z.bg, color: z.fg,
@@ -307,6 +313,79 @@ function SyncOverlay({ period }: { period: string }) {
   )
 }
 
+/**
+ * Overlay for occupancy sync — matches SyncOverlay style.
+ */
+function SyncOccupancyOverlay({ period }: { period: string }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sync-occupancy-title"
+      aria-busy="true"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9000,
+        background: 'rgba(15, 23, 42, 0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+        animation: 'psFadeIn 0.12s ease',
+      }}
+    >
+      <style>{`
+        @keyframes psFadeIn { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes psPopIn  { from { opacity: 0; transform: translateY(6px) scale(0.97) } to { opacity: 1; transform: none } }
+        @keyframes psSpin   { to { transform: rotate(360deg) } }
+        @keyframes psPulse  { 0%,100% { opacity: 1 } 50% { opacity: 0.45 } }
+        @media (prefers-reduced-motion: reduce) {
+          .ps-spin  { animation: none !important; border-top-color: #a855f7 !important }
+          .ps-pulse { animation: none !important }
+        }
+      `}</style>
+
+      <div style={{
+        background: '#fff', borderRadius: 12,
+        width: '100%', maxWidth: 420,
+        boxShadow: '0 20px 50px rgba(0,0,0,0.20)',
+        animation: 'psPopIn 0.16s ease',
+        overflow: 'hidden',
+        fontFamily: "'DM Sans', sans-serif",
+        padding: '26px 26px 22px',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+        textAlign: 'center',
+      }}>
+        <div
+          className="ps-spin"
+          aria-hidden="true"
+          style={{
+            width: 38, height: 38, borderRadius: '50%',
+            border: `3px solid ${BORDER}`, borderTopColor: '#a855f7',
+            animation: 'psSpin 0.8s linear infinite',
+          }}
+        />
+        <div>
+          <div id="sync-occupancy-title" style={{ fontSize: 16, fontWeight: 700, color: TEXT, letterSpacing: '-0.01em' }}>
+            Syncing Occupancy
+          </div>
+          <div className="ps-pulse" style={{
+            marginTop: 5, fontSize: 13, color: TEXT_SOFT,
+            animation: 'psPulse 1.6s ease-in-out infinite',
+          }}>
+            {period} — scraping from Nookal
+          </div>
+        </div>
+        <div style={{
+          fontSize: 12, color: TEXT_MUTE, lineHeight: 1.55,
+          borderTop: `1px solid ${BORDER}`, paddingTop: 12, width: '100%',
+        }}>
+          Browser automation takes around
+          <strong style={{ color: TEXT_SOFT }}> 1–2 minutes</strong>. 
+          Please do not close this page.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 type DraftRow = Partial<Record<ManualField, string>>
 
 interface StatsRowProps {
@@ -406,11 +485,20 @@ export default function PractitionerStatsPage() {
   const [error,   setError]   = useState('')
 
   const [syncing, setSyncing] = useState(false)
+  const [syncingOccupancy, setSyncingOccupancy] = useState(false)
+  const [occupancyConfigured, setOccupancyConfigured] = useState<boolean | null>(null)
   const [editing, setEditing] = useState(false)
   // Drafts are keyed by clinician and held as strings so a half-typed value and a
   // deliberately cleared field both survive until commit.
   const [drafts,  setDrafts]  = useState<Record<string, DraftRow>>({})
   const [saving,  setSaving]  = useState(false)
+
+  // Check if occupancy scraping is configured on mount
+  useEffect(() => {
+    practitionerStatsApi.getOccupancyStatus()
+      .then(status => setOccupancyConfigured(status.configured))
+      .catch(() => setOccupancyConfigured(false))
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -462,12 +550,41 @@ export default function PractitionerStatsPage() {
       if (r.unmappedProviderIds.length) {
         bits.push(`${r.unmappedProviderIds.length} Nookal provider(s) skipped — no PhysioWard account`)
       }
+      // Occupancy is called out separately because Sync cannot produce it, and a
+      // blank column would otherwise read as nobody having looked.
+      if (r.occupancyNeedsImport) {
+        bits.push(`${r.occupancyNeedsImport} week-row(s) still need Occupancy — click "Sync Occupancy" to scrape from Nookal`)
+      }
       toast.success(`Synced ${MONTHS[month - 1]} ${year} — ${bits.join(' · ')}`)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Sync failed'
       toast.error(`${msg} — nothing was changed`)
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const runSyncOccupancy = async () => {
+    setSyncingOccupancy(true)
+    try {
+      const r = await practitionerStatsApi.syncOccupancy(year, month)
+      await load()
+      
+      const totalWritten = r.results.reduce((sum, res) => sum + res.written, 0)
+      const totalScraped = r.results.reduce((sum, res) => sum + res.scraped, 0)
+      const allUnmatched = [...new Set(r.results.flatMap(res => res.unmatched))]
+      
+      const bits = [`${totalScraped} providers scraped · ${totalWritten} rows written`]
+      if (allUnmatched.length > 0) {
+        bits.push(`unmatched: ${allUnmatched.join(', ')}`)
+      }
+      
+      toast.success(`Occupancy synced for ${MONTHS[month - 1]} ${year} — ${bits.join(' · ')}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Occupancy sync failed'
+      toast.error(`${msg} — check Nookal web credentials`)
+    } finally {
+      setSyncingOccupancy(false)
     }
   }
 
@@ -529,9 +646,12 @@ export default function PractitionerStatsPage() {
     }
   }
 
+  // hideNav: reached only from the /admin-home card since 2026-08-16, so the
+  // page stands on its own — the "← Home" button is the way back.
   return (
-    <AppShell>
+    <AppShell hideNav>
       {syncing && <SyncOverlay period={`${MONTHS[month - 1]} ${year}`} />}
+      {syncingOccupancy && <SyncOccupancyOverlay period={`${MONTHS[month - 1]} ${year}`} />}
       <div className="pw-page" style={{ padding: '20px 28px' }}>
 
         <div style={{ marginBottom: 16 }}>
@@ -618,17 +738,35 @@ export default function PractitionerStatsPage() {
 
           <button
             onClick={runSync}
-            disabled={syncing || editing}
-            title="Pull this month's appointments from Nookal and fill Total Appts, NC and cancellations for every practitioner. Occupancy is not touched — Nookal has no working-hours figure."
+            disabled={syncing || syncingOccupancy || editing}
+            title="Pull this month's appointments from Nookal and fill Total Appts, NC and cancellations for every practitioner."
             style={{
               marginLeft: 'auto', padding: '7px 15px', borderRadius: 7,
               border: 'none', background: syncing ? '#9ca3af' : TEAL, color: '#fff',
               fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
-              cursor: syncing || editing ? 'not-allowed' : 'pointer',
+              cursor: syncing || syncingOccupancy || editing ? 'not-allowed' : 'pointer',
             }}
           >
             {syncing ? 'Syncing Nookal…' : 'Sync Nookal'}
           </button>
+
+          {occupancyConfigured && (
+            <button
+              onClick={runSyncOccupancy}
+              disabled={syncing || syncingOccupancy || editing}
+              title="Scrape the Occupancy report directly from Nookal's web interface using browser automation. This gets the exact figures Nookal displays — Occupied ÷ Scheduled Minutes including rostered hours. Takes 1-2 minutes for a full month."
+              style={{
+                padding: '7px 15px', borderRadius: 7,
+                border: 'none', 
+                background: syncingOccupancy ? '#9ca3af' : '#a855f7', 
+                color: '#fff',
+                fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
+                cursor: syncing || syncingOccupancy || editing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {syncingOccupancy ? 'Syncing Occupancy…' : 'Sync Occupancy'}
+            </button>
+          )}
 
           {week && (
             editing ? (
@@ -647,7 +785,7 @@ export default function PractitionerStatsPage() {
             ) : (
               <button
                 onClick={beginEdit}
-                title="Type in Occupancy by hand — Nookal exposes no working-hours figure. Total Appts and NC come from Sync."
+                title="Type in figures by hand. Total Appts and NC come from Sync; Occupancy comes from the Nookal Occupancy report import. Use this to correct any of them, or to fill an Occupancy without exporting. Anything you type here outranks both and survives every later Sync."
                 style={{
                   padding: '7px 15px', borderRadius: 7,
                   border: `1px solid ${TEAL}`, background: '#f0faf7', color: TEAL,

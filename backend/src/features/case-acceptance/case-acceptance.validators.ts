@@ -41,7 +41,7 @@ const requiredPrepay = z.boolean({
 // What to do when an entry with the same natural key already exists. Absent
 // (= 'reject') is the safe default: an old client, or a direct API call, gets
 // the 409 rather than silently creating the duplicate this feature prevents.
-const onDuplicateEnum = z.enum(['reject', 'overwrite', 'allow']);
+const onDuplicateEnum = z.enum(['reject', 'allow']);
 
 const baseShape = {
   on_duplicate:             onDuplicateEnum.optional(),

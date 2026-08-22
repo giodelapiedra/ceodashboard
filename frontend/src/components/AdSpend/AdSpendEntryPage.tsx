@@ -406,7 +406,17 @@ export default function AdSpendEntryPage() {
   if (!user) return null
 
   const isAdmin = user.role === 'ADMIN'
-  const [tab, setTab] = useState<Tab>(isAdmin ? 'entries' : 'enter')
+  // ADMIN and ADSPEND are the only two roles that reach this page, and since
+  // 2026-08-12 Sam wants them to see the IDENTICAL page — same tabs, same
+  // panels, same landing tab. Everything that used to branch on `isAdmin` for
+  // *layout* now uses this instead; `isAdmin` is left only where it still means
+  // a genuine permission difference.
+  //
+  // Why they converged: the encoder now runs the Google / Facebook sync itself,
+  // so the numbers arrive automatically and the manual "Enter Week" form it used
+  // to land on is redundant.
+  const usesAdminView = isAdmin || user.role === 'ADSPEND'
+  const [tab, setTab] = useState<Tab>(usesAdminView ? 'entries' : 'enter')
 
   // ── Entries list ──
   const [rows,    setRows]    = useState<AdSpendDTO[]>([])
@@ -492,9 +502,13 @@ export default function AdSpendEntryPage() {
     } catch (e: any) { toast.error(e.response?.data?.error?.message || 'Failed to delete') }
   }
 
+  // Stays on `isAdmin` — this is a real permission, not layout, and the server
+  // enforces the same rule. In practice the encoder sees Edit/Delete on
+  // everything anyway: the Google / Facebook sync writes its rows with
+  // entered_by = the ADSPEND account, so they are "its own".
   const isEditable = (row: AdSpendDTO) => isAdmin || row.entered_by === user.id
 
-  // ── Leads Paid vs Spend (ADMIN only) ──
+  // ── Leads Paid vs Spend ──
   // Nookal Paid of booked Meta/Google leads vs ad spend per platform. Paid
   // side comes from the values the "Sync Paid (Nookal)" button on the Leads
   // page saved — cheap SQL here, no Nookal calls. All-time by default; the
@@ -502,20 +516,31 @@ export default function AdSpendEntryPage() {
   const [roi, setRoi]           = useState<LeadsRoi | null>(null)
   const [roiRange, setRoiRange] = useState({ from: '', to: '' })
   const loadRoi = useCallback(() => {
-    if (!isAdmin) return
+    if (!usesAdminView) return
     adSpendApi.leadsRoi(roiRange.from, roiRange.to)
       .then(setRoi).catch(() => { /* card row just stays hidden */ })
-  }, [isAdmin, roiRange])
+  }, [usesAdminView, roiRange])
   useEffect(() => { loadRoi() }, [loadRoi])
 
-  // ── Ads sync (ADMIN only) ──
+  // ── Ads sync (ADMIN + the ad-spend encoder) ──
   const [syncing,      setSyncing]      = useState(false)
   const [syncingFb,    setSyncingFb]    = useState(false)
   const [syncResult,   setSyncResult]   = useState<string | null>(null)
-  // Sync always covers the full current year (Jan 1 → today) — no range UI;
-  // the page's other filters handle narrowing what you LOOK at, not what syncs.
-  const syncFrom = `${new Date().getFullYear()}-01-01`
+  // Sync always covers the FULL history — no range UI; the page's other filters
+  // handle narrowing what you LOOK at, not what syncs.
+  //
+  // It used to start at Jan 1 of the current year, which silently dropped every
+  // pre-2026 dollar: A$2,494 of Google spend (2021 + 2025) never reached the DB,
+  // so the all-time total read $13.1k against Google's own $15.6k (Sam, 2026-08-14).
+  // Google's first ever spend day is 2021-10-25, so 2021-01-01 covers everything.
+  const syncFrom = '2021-01-01'
   const syncTo   = todayISO()
+
+  // Meta's Insights API rejects a start date more than 37 months back, so
+  // Facebook gets its own floor of 36 months ago instead of 2021.
+  const fbFloor = new Date()
+  fbFloor.setMonth(fbFloor.getMonth() - 36)
+  const syncFromFb = fbFloor.toISOString().slice(0, 10)
 
   const onSyncGoogle = async () => {
     setSyncing(true); setSyncResult(null)
@@ -537,10 +562,10 @@ export default function AdSpendEntryPage() {
   const onSyncFacebook = async () => {
     setSyncingFb(true); setSyncResult(null)
     try {
-      const res = await adSpendApi.syncFacebook(syncFrom, syncTo)
+      const res = await adSpendApi.syncFacebook(syncFromFb, syncTo)
       const msg = res.inserted > 0
-        ? `Synced ${res.inserted} Facebook Ads entries (${syncFrom} → ${syncTo})`
-        : `No Facebook Ads spend found for ${syncFrom} → ${syncTo}`
+        ? `Synced ${res.inserted} Facebook Ads entries (${syncFromFb} → ${syncTo})`
+        : `No Facebook Ads spend found for ${syncFromFb} → ${syncTo}`
       setSyncResult(msg)
       toast.success(msg)
       await loadEntries()
@@ -551,18 +576,25 @@ export default function AdSpendEntryPage() {
     } finally { setSyncingFb(false) }
   }
 
+  // 'enter' is currently unreachable: both roles that can open this page are in
+  // usesAdminView. WeeklyInputForm is kept rather than deleted because only the
+  // Google and Facebook channels have a sync — Instagram / TikTok / Other have
+  // no other way in, so flipping this one flag is how manual entry comes back.
   const tabs: { id: Tab; label: string; show: boolean }[] = [
-    { id: 'enter',   label: 'Enter Week',    show: !isAdmin },
-    { id: 'weekly',  label: 'Weekly Report', show: true     },
-    { id: 'entries', label: 'All Entries',   show: true     },
+    { id: 'enter',   label: 'Enter Week',    show: !usesAdminView },
+    { id: 'weekly',  label: 'Weekly Report', show: true          },
+    { id: 'entries', label: 'All Entries',   show: true          },
   ]
 
+  // hideNav: the ADSPEND encoder never had topbar nav here, and since
+  // 2026-08-16 the admin reaches this page only from the /admin-home card —
+  // so neither role gets a menu. "← Home" goes back to the right hub for each.
   return (
-    <AppShell title="Ad Spend">
+    <AppShell title="Ad Spend" hideNav>
       <div className="pw-page" style={{ padding:'20px 28px' }}>
 
-        {/* Ads sync — ADMIN only */}
-        {isAdmin && (
+        {/* Ads sync — ADMIN + the ad-spend encoder */}
+        {usesAdminView && (
           <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, padding:'12px 16px', background:'#f0faf7', border:`1px solid #a7f3d0`, borderRadius:10, flexWrap:'wrap' }}>
             <button
               onClick={onSyncGoogle}
@@ -584,8 +616,8 @@ export default function AdSpendEntryPage() {
           </div>
         )}
 
-        {/* Leads Paid vs Spend — ADMIN only, all-time unless a range is picked */}
-        {isAdmin && roi && (
+        {/* Leads Paid vs Spend — all-time unless a range is picked */}
+        {usesAdminView && roi && (
           <div style={{ marginBottom:16 }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:8, flexWrap:'wrap' }}>
               <span style={{ fontSize:13, fontWeight:700, color:TEXT }}>Leads Paid vs Spend</span>
@@ -622,8 +654,8 @@ export default function AdSpendEntryPage() {
           ))}
         </div>
 
-        {/* Enter Week */}
-        {tab === 'enter' && !isAdmin && <WeeklyInputForm onSaved={loadEntries} />}
+        {/* Enter Week — see the note on `tabs`: no role selects this tab today. */}
+        {tab === 'enter' && !usesAdminView && <WeeklyInputForm onSaved={loadEntries} />}
 
         {/* Weekly Report */}
         {tab === 'weekly' && (
@@ -713,7 +745,7 @@ export default function AdSpendEntryPage() {
                 <div style={{ padding:40, textAlign:'center', color:'#9ca3af' }}>Loading…</div>
               ) : rows.length === 0 ? (
                 <div style={{ padding:40, textAlign:'center', color:'#9ca3af' }}>
-                  No entries yet.{!isAdmin && ' Use Enter Week tab to add spend.'}
+                  No entries yet.{!usesAdminView && ' Use Enter Week tab to add spend.'}
                 </div>
               ) : (
                 <div style={{ overflowX:'auto' }}>

@@ -88,7 +88,8 @@ export interface ListFilters {
   clinic_id?: string;    // ADMIN / FRONT_DESK_GLOBAL only; ignored for others
   date_from?: string;
   date_to?:   string;
-  platform?:  string;
+  /** One platform, or several (multi-select filter). */
+  platform?:  string | string[];
   booked?:    boolean;
   /** Case-insensitive partial match across patient_name, campaign_name, bella_remarks. */
   search?:    string;
@@ -148,12 +149,17 @@ const SELECT_JOINED = `
 
 /**
  * Scope every list/find query:
- * - ADMIN / FRONT_DESK_GLOBAL → no row filter (see all clinics)
- * - FRONT_DESK                → pinned to own clinic
- * - anyone else (CLINICIAN / ADSPEND) → no rows (leads are not their concern)
+ * - ADMIN / FRONT_DESK_GLOBAL / ADSPEND → no row filter (see all clinics)
+ * - FRONT_DESK                          → pinned to own clinic
+ * - anyone else (CLINICIAN)             → no rows (leads are not their concern)
+ *
+ * ADSPEND joined the cross-clinic group 2026-08-12: the account has clinic_id
+ * NULL, so a pinned filter would show it nothing. The feature-level gate is
+ * `canAccessAdLeads` (allow-listed emails only) — reaching this function at all
+ * already means the caller is allowed in.
  */
 function applyScope(scope: RequestScope, startIndex: number): { sql: string; params: unknown[] } {
-  if (scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL') {
+  if (scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'ADSPEND') {
     return { sql: '1=1', params: [] };
   }
   if (scope.role === 'FRONT_DESK') {
@@ -173,7 +179,12 @@ function buildWhere(scope: RequestScope, filters: ListFilters): { sql: string; p
   params.push(...scoped.params);
   where.push(scoped.sql);
 
-  if ((scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL') && filters.clinic_id) {
+  // Only the cross-clinic roles may narrow by clinic — for FRONT_DESK the pin in
+  // applyScope already decided it, and honouring the filter would be a no-op.
+  if (
+    (scope.role === 'ADMIN' || scope.role === 'FRONT_DESK_GLOBAL' || scope.role === 'ADSPEND') &&
+    filters.clinic_id
+  ) {
     params.push(filters.clinic_id);
     where.push(`l.clinic_id = $${params.length}`);
   }
@@ -186,8 +197,14 @@ function buildWhere(scope: RequestScope, filters: ListFilters): { sql: string; p
     where.push(`l.date_added <= $${params.length}`);
   }
   if (filters.platform) {
-    params.push(filters.platform);
-    where.push(`l.platform = $${params.length}`);
+    const platforms = Array.isArray(filters.platform) ? filters.platform : [filters.platform];
+    if (platforms.length === 1) {
+      params.push(platforms[0]);
+      where.push(`l.platform = $${params.length}`);
+    } else {
+      params.push(platforms);
+      where.push(`l.platform = ANY($${params.length}::text[])`);
+    }
   }
   if (filters.booked !== undefined) {
     params.push(filters.booked);
@@ -281,7 +298,7 @@ export const adLeadRepository = {
   },
 
   /**
-   * Unscoped joined read. Used by create() / overwrite() to build the response
+   * Unscoped joined read. Used by create() to build the response
    * from INSIDE their own transaction — a scoped read on a pooled connection
    * would run on a different session and not see the uncommitted row.
    */

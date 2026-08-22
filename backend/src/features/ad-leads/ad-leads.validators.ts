@@ -1,5 +1,14 @@
 import { z } from 'zod';
 import { AD_LEAD_PLATFORMS, CLINIC_IDS, AdLeadPlatform, ClinicId } from '../../shared/roles';
+import { patientNameProblem } from '../../shared/patient-name';
+
+// A date in the name cell passes every other check but can never match a
+// Nookal patient, so the lead silently counts $0 toward Leads Paid vs Spend.
+const patientName = z.string().min(1).max(200).trim()
+  .superRefine((v, ctx) => {
+    const problem = patientNameProblem(v);
+    if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+  });
 
 // Shape + real-calendar refine (rejects e.g. 2026-02-30 and year typos).
 const isoDate = z
@@ -15,20 +24,26 @@ const isoDate = z
 const platformEnum = z.enum([...AD_LEAD_PLATFORMS] as [AdLeadPlatform, ...AdLeadPlatform[]]);
 const clinicEnum   = z.enum([...CLINIC_IDS]       as [ClinicId,       ...ClinicId[]]);
 
+// Platform Source is optional on new leads — front desk doesn't always know
+// which ad channel a lead actually came from at the time of entry. Accepts a
+// real platform, an explicit '' ("not specified"), or omitted entirely.
+const platformField = z.union([platformEnum, z.literal('')]).optional();
+
 const shortText = z.string().max(200).trim().nullable().optional();
 const longText  = z.string().max(2000).trim().nullable().optional();
 
 // What to do when a lead with the same natural key already exists. Absent
 // (= 'reject') is the safe default: an old client, or a direct API call, gets
 // the 409 rather than silently creating the duplicate this feature prevents.
-const onDuplicateEnum = z.enum(['reject', 'overwrite', 'allow']);
+const onDuplicateEnum = z.enum(['reject', 'allow']);
 
 export const createAdLeadSchema = z.object({
   on_duplicate:  onDuplicateEnum.optional(),
-  // FRONT_DESK is pinned by scope; FRONT_DESK_GLOBAL / ADMIN must set clinic_id.
+  // FRONT_DESK is pinned by scope; FRONT_DESK_GLOBAL / ADMIN / ADSPEND must set
+  // clinic_id (those accounts have no clinic of their own).
   clinic_id:     clinicEnum.optional(),
-  patient_name:  z.string().min(1).max(200).trim(),
-  platform:      platformEnum,
+  patient_name:  patientName,
+  platform:      platformField,
   campaign_name: shortText,
   date_added:    isoDate,
   booked:        z.boolean().optional(),
@@ -38,7 +53,7 @@ export const createAdLeadSchema = z.object({
 });
 
 export const updateAdLeadSchema = z.object({
-  patient_name:  z.string().min(1).max(200).trim().optional(),
+  patient_name:  patientName.optional(),
   platform:      platformEnum.optional(),
   campaign_name: shortText,
   date_added:    isoDate.optional(),
@@ -52,7 +67,9 @@ export const listAdLeadsQuerySchema = z.object({
   clinic_id: clinicEnum.optional(),
   date_from: isoDate.optional(),
   date_to:   isoDate.optional(),
-  platform:  platformEnum.optional(),
+  // A repeated ?platform= query key arrives as an array (multi-select filter);
+  // a single pick arrives as a bare string.
+  platform:  z.union([platformEnum, z.array(platformEnum).min(1)]).optional(),
   // Query strings arrive as 'true' / 'false'.
   booked:    z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
   search:    z.string().trim().min(1).max(100).optional(),
@@ -65,7 +82,7 @@ export const listAdLeadsQuerySchema = z.object({
 export const checkAdLeadDuplicateSchema = z.object({
   clinic_id:    clinicEnum.optional(),
   patient_name: z.string().min(1).max(200).trim(),
-  platform:     platformEnum,
+  platform:     platformField,
   date_added:   isoDate,
   exclude_id:   z.string().regex(/^\d+$/, 'Must be a numeric id').optional(),
 });

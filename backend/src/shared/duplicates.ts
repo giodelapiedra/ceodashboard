@@ -6,13 +6,16 @@ import { AppError } from './errors';
  * exists:
  *   - 'reject'    (default) → 409 CONFLICT carrying the existing row, so the
  *                  UI can show a side-by-side diff and let the user choose.
- *   - 'overwrite' → update the existing row with the incoming values instead
- *                  of inserting a second one. Subject to the SAME permission
- *                  rules as a normal edit (see each service).
- *   - 'allow'     → the user looked at the diff and confirmed it is genuinely
- *                  a separate entry — insert anyway.
+ *   - 'allow'     → the user looked at the diff and chose to save anyway —
+ *                  insert a second row.
+ *
+ * There is deliberately no 'overwrite'. Until 2026-08-12 a duplicate could be
+ * written over in place, which for a non-admin meant being pushed into the
+ * edit-request approval queue mid-entry. Sam's call: the guard warns, it never
+ * blocks and never routes an entry into review. Correcting a saved row is a
+ * separate, explicit action from the entries list.
  */
-export type OnDuplicate = 'reject' | 'overwrite' | 'allow';
+export type OnDuplicate = 'reject' | 'allow';
 
 /**
  * Canonical patient name for duplicate matching: inner whitespace collapsed,
@@ -48,18 +51,15 @@ export const NAME_NORM_SQL = (col: string): string =>
  */
 export const SIMILAR_WINDOW_DAYS = 14;
 
-/** What the 409 body and the pre-flight check both return. */
+/**
+ * What the 409 body and the pre-flight check both return. Purely informational:
+ * every field here feeds the warning dialog, and nothing in it can stop a save.
+ */
 export interface DuplicateReport<T> {
   /** Same natural key — a true duplicate. */
   exact:   T | null;
   /** Same patient + clinic near the same date, different key. Advisory only. */
   similar: T[];
-  /**
-   * Whether THIS caller is allowed to overwrite `exact` directly. False means
-   * the UI must offer "send for admin approval" (edit-request) instead — the
-   * permission rules are unchanged by this feature.
-   */
-  can_overwrite: boolean;
 }
 
 /**
@@ -85,7 +85,7 @@ export function duplicateConflict<T>(
 ): AppError {
   return new AppError(
     'CONFLICT',
-    `This ${label} has already been logged. Overwrite the existing entry, or confirm it is a separate one.`,
+    `This ${label} has already been logged. Check the details, then save it anyway if it is a separate one.`,
     { kind: 'duplicate', ...report }
   );
 }

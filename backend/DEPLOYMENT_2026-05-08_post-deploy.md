@@ -206,7 +206,7 @@ systemctl status certbot.timer    # auto-renew is active
 
 The Ubuntu DB started with only the seeded CEO user (post-deploy state).
 The actual data Sam had been entering on the local development DB
-(`postgres://postgres:2210@localhost:5432/nookal`) was migrated up.
+(`postgres://postgres:<local-password>@localhost:5432/nookal`) was migrated up.
 
 **Counts before migration (Ubuntu side):**
 
@@ -234,7 +234,7 @@ dashboard_snapshots | 27   (cache, harmless)
    `C:\Program Files\PostgreSQL\18\bin\pg_dump.exe`):
 
    ```powershell
-   $env:PGPASSWORD = "2210"
+   $env:PGPASSWORD = "<local-postgres-password>"
    & "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" -U postgres -h localhost -d nookal `
      --clean --if-exists --no-owner --no-acl `
      -f "D:\New folder (7)\PhysioWard_v2\local-dump.sql"
@@ -341,8 +341,8 @@ cp package.json "package.json.backup-$(date +%Y%m%d-%H%M%S)"
 # Extract — overwrites src/ in place, no need to delete first
 tar -xzf /tmp/backend-src.tar.gz
 
-# Reinstall deps (only changes anything if package-lock.json differs)
-npm ci
+# Reinstall deps — npm install, NOT npm ci. See the warning below.
+npm install
 
 # Build TypeScript → dist/
 npm run build
@@ -351,6 +351,38 @@ npm run build
 sudo -u physioward HOME=/var/www/physioward PM2_HOME=/var/www/physioward/.pm2 \
   pm2 restart physioward-backend --update-env
 ```
+
+> ### ⚠️ NEVER run `npm ci` on this VPS — it takes the site down
+>
+> Hit on the 2026-08-12 deploy. `npm ci` **deletes `node_modules` first**, then
+> reinstalls from scratch. `bcrypt` has no prebuilt binary for this box's Node
+> and has to compile — and **there is no C++ toolchain installed** (`python3`
+> exists, but `make`, `g++` and `gcc` do not). So the install dies half-way and
+> leaves `node_modules` empty.
+>
+> The site stays up only because the running Node process already holds its
+> modules in memory. **The next PM2 restart would 502 the API.**
+>
+> `npm install` is safe: it reuses what is already there and does not force a
+> bcrypt rebuild. That is what recovered it (325 packages, `bcrypt_lib.node`
+> back in place).
+>
+> Do NOT "fix" this by installing build-essential — that is an unrequested
+> toolchain on a box shared with `aegira`. Use `npm install`.
+
+> ### ⚠️ Keep backup folders OUT of `src/`
+>
+> Also hit on 2026-08-12. Two leftovers from the 2026-08-06 deploys were sitting
+> inside the compile path:
+>
+> - `src/features/dropouts.before-20260806-approval`
+> - `src/db.before-20260806-gsheets-fix`
+>
+> `tsc` compiles everything under `src/`, so these stale copies broke the build
+> against the current shared types. They were moved to `src-backups/` (a sibling
+> of `src/`, not deleted). **Untarring never removes server-side extras** — it
+> only overwrites matching paths, so anything like this survives every deploy
+> until someone moves it. Park backups in `src-backups/`, never in `src/`.
 
 **Verify all routes are registered after restart:**
 

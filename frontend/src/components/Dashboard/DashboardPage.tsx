@@ -1,8 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { DashboardData, WeekMetrics, MonthlyTotals } from '../../types'
-import { dashboardApi, AgeingDebtsData } from '../../api/dashboard.api'
+import { dashboardApi, AgeingDebtsMonth } from '../../api/dashboard.api'
 import FetchProgress from '../common/FetchProgress'
 import AppShell from '../shared/AppShell'
+import { useAuthStore } from '../../store/auth.store'
+import { toast } from '../../store/toast.store'
 
 // ── Format helpers ────────────────────────────────────────────
 // Two render states for empty cells:
@@ -73,13 +75,21 @@ function SectionHeader({ label, weekCols }: { label: string; weekCols: number })
 type CellVal = string
 
 function DataRow({
-  label, definition, cells,
-  metricType, monthly, monthlyGoal, highlight, alt,
+  label, definition, cells, cellNodes,
+  metricType, monthly, monthlyNode, monthlyGoal, highlight, alt,
 }: {
   label: string; definition: string
   /** One value per week column, in API order (Week 1 → last week of month). */
   cells: CellVal[]
+  /** Renders instead of `cells` in the week columns — for the hand-typed
+   *  Ageing Debts row, whose week cells are input boxes. `cells` is still
+   *  required: it decides whether each cell reads as muted or as a real value. */
+  cellNodes?: React.ReactNode[]
   metricType: string; monthly: CellVal; monthlyGoal?: CellVal
+  /** Renders instead of `monthly` inside the Monthly Actual cell — for the one
+   *  row that is hand-typed (Ageing Debts). `monthly` is still required: it is
+   *  what decides whether the cell reads as muted or as a real value. */
+  monthlyNode?: React.ReactNode
   highlight?: boolean; alt?: boolean
 }) {
   const rowBg = highlight ? TEAL_SOFT : alt ? ROW_ALT : '#fff'
@@ -109,7 +119,7 @@ function DataRow({
         borderBottom: `1px solid ${BORDER}`, background: rowBg,
         minWidth: 260, lineHeight: 1.4,
       }}>{definition}</td>
-      {cells.map((c, i) => <td key={i} style={numericCell(c)}>{c}</td>)}
+      {cells.map((c, i) => <td key={i} style={numericCell(c)}>{cellNodes?.[i] ?? c}</td>)}
       <td style={{
         padding: '9px 10px', fontSize: 10, fontWeight: 500,
         textAlign: 'center', color: TEXT_MUTED,
@@ -117,7 +127,7 @@ function DataRow({
         borderBottom: `1px solid ${BORDER}`, background: rowBg,
         whiteSpace: 'nowrap',
       }}>{metricType || ''}</td>
-      <td style={numericCell(monthly, true)}>{monthly}</td>
+      <td style={numericCell(monthly, true)}>{monthlyNode ?? monthly}</td>
       <td style={{ ...numericCell(monthlyGoal ?? ZERO_INT), color: TEXT_MUTED }}>
         {monthlyGoal ?? ZERO_INT}
       </td>
@@ -125,8 +135,121 @@ function DataRow({
   )
 }
 
+// ── Ageing Debts cell (the hand-typed figures) ─────────────────
+// Was a slow on-demand Nookal fetch behind its own button; Sam asked
+// (2026-08-11) to type the number in instead, then (2026-08-12) to type it per
+// WEEK COLUMN and have Monthly Actual add them up. One of these renders in each
+// week cell; the Monthly Actual cell is now a computed total, not an input.
+//
+// The box is ALWAYS visible for admins. It started out as click-to-edit, but
+// the only click target was a single "—" with a dotted underline — Sam couldn't
+// find it (2026-08-12). A permanent bordered input with a "$" in front is the
+// whole affordance now; the print stylesheet strips the border back off.
+//
+// Non-admins get plain read-only text, no box.
+function AgeingDebtsCell({
+  value, canEdit, onSave, onClear, width = 104, title,
+}: {
+  value: number | null
+  canEdit: boolean
+  onSave: (amount: number) => Promise<void>
+  onClear: () => Promise<void>
+  /** Week columns are narrower than the Monthly Actual column. */
+  width?: number
+  title?: string
+}) {
+  const asDraft = (v: number | null) => (v == null ? '' : v.toFixed(2))
+
+  const [draft,   setDraft]   = useState(() => asDraft(value))
+  const [saving,  setSaving]  = useState(false)
+  const [focused, setFocused] = useState(false)
+  // Enter blurs to commit; a slow save must not let a second blur fire the same
+  // PUT again while the first is still in flight.
+  const inFlight = useRef(false)
+
+  // Re-sync when the clinic/month switches or a save returns the stored figure.
+  // Never while focused, or it would yank the number out from under the typing.
+  useEffect(() => {
+    if (!focused) setDraft(asDraft(value))
+  }, [value, focused])
+
+  if (!canEdit) {
+    return <>{value == null ? NO_DATA : fmtCurrency(value)}</>
+  }
+
+  const commit = async () => {
+    if (inFlight.current) return
+
+    // Accept what a CEO actually pastes out of Nookal: "$12,345.00".
+    const raw = draft.replace(/[$,\s]/g, '')
+
+    // An emptied box means "clear this month" — deliberately not the same as
+    // typing 0, which is the real figure when every debt has been paid.
+    if (raw === '') {
+      if (value == null) return
+      inFlight.current = true
+      setSaving(true)
+      try { await onClear() } finally { setSaving(false); inFlight.current = false }
+      return
+    }
+
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n < 0) {
+      toast.error('Enter a number of 0 or more')
+      setDraft(asDraft(value))
+      return
+    }
+
+    if (n === value) return       // unchanged — skip the round trip
+    inFlight.current = true
+    setSaving(true)
+    try { await onSave(n) } finally { setSaving(false); inFlight.current = false }
+  }
+
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 3,
+      justifyContent: 'flex-end', width: '100%',
+    }}>
+      <span style={{ color: TEXT_MUTED, fontSize: 11, fontWeight: 400 }}>$</span>
+      <input
+        className="ageing-input"
+        value={draft}
+        disabled={saving}
+        onChange={e => setDraft(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => { setFocused(false); commit() }}
+        onKeyDown={e => {
+          // Blur is the single commit path — Enter just triggers it, so a save
+          // can never be submitted twice for one edit.
+          if (e.key === 'Enter')  { e.preventDefault(); e.currentTarget.blur() }
+          if (e.key === 'Escape') { e.preventDefault(); setDraft(asDraft(value)); e.currentTarget.blur() }
+        }}
+        placeholder={saving ? 'Saving…' : '0.00'}
+        inputMode="decimal"
+        title={title ?? 'Type the Ageing Debts figure. Enter saves. Leave it blank to clear.'}
+        style={{
+          width, boxSizing: 'border-box',
+          textAlign: 'right', fontSize: 12.5, fontWeight: 600,
+          fontFamily: "'DM Mono', monospace", fontVariantNumeric: 'tabular-nums',
+          color: TEXT, background: '#fff',
+          borderRadius: 4, padding: '3px 6px',
+        }}
+      />
+    </span>
+  )
+}
+
 // ── Dashboard Table ───────────────────────────────────────────
-function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardData; ageingDebts: AgeingDebtsData | null; ageingLoading: boolean }) {
+function DashboardTable({ data, ageing, canEditAgeing, onSaveAgeingWeek, onClearAgeingWeek }: {
+  data: DashboardData
+  /** The hand-typed Ageing Debts week columns + derived total for this month. */
+  ageing: AgeingDebtsMonth | null
+  canEditAgeing: boolean
+  /** `week` is the 1-based column position, matching the API's week_num. */
+  onSaveAgeingWeek:  (week: number, amount: number) => Promise<void>
+  onClearAgeingWeek: (week: number) => Promise<void>
+}) {
   const w = data.weeks
   const m = data.monthly
 
@@ -217,6 +340,12 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
       <style>{`
         .metric-row { transition: background 0.12s }
         .metric-row:hover td { background: #f5f7fa !important }
+        /* Ageing Debts is the only typed-in figure — the box IS the affordance,
+           so it stays visible at rest instead of appearing on click. */
+        .ageing-input { border: 1px solid #d1d5db; outline: none; transition: border-color 0.12s, box-shadow 0.12s }
+        .ageing-input:hover { border-color: #9ca3af }
+        .ageing-input:focus { border-color: ${TEAL}; box-shadow: 0 0 0 2px rgba(15,110,86,0.12) }
+        .ageing-input:disabled { background: #f9fafb; color: ${TEXT_MUTED} }
       `}</style>
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
         <thead>
@@ -267,20 +396,62 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
           {crow('Cash Collected from Insurance Patients',
             'Cash collected from insurance patients last 7 days',
             'cashFromInsurance', 'cashFromInsurance')}
-          {/* Ageing Debts — 10-year snapshot (2016→today) from Nookal.
-              Not a weekly metric — shows current outstanding total in Monthly Actual only. */}
-          <DataRow
-            label="Ageing Debts"
-            definition={
-              ageingLoading
-                ? 'Fetching outstanding balances from Nookal… this may take a minute.'
-                : `Total outstanding invoice balances (last 10 years). Current snapshot from Nookal.${ageingDebts ? ` Last updated: ${new Date(ageingDebts.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}` : ''}`
-            }
-            cells={w.map(() => NO_DATA)}
-            metricType="Total"
-            monthly={ageingDebts ? fmtCurrency(ageingDebts.total) : ageingLoading ? 'Fetching…' : NO_DATA}
-            alt={nextAlt()}
-          />
+          {/* Ageing Debts — hand-typed, not pulled from Nookal (migrations 027
+              + 028). Typed per WEEK COLUMN since 2026-08-12; Monthly Actual is
+              their SUM and is no longer editable. 'Overall' is typed
+              separately, NOT summed from the three clinics — Sam reads a
+              practice-wide total off Nookal that need not equal the sum of the
+              per-location figures.
+
+              Months typed before 2026-08-12 have no week rows; the API serves
+              their old monthly figure instead (source: 'monthly') so nothing
+              already entered disappears. Typing any week replaces it. */}
+          {(() => {
+            const byWeek = new Map((ageing?.weeks ?? []).map(x => [x.week_num, x]))
+            const lastEdit = (ageing?.weeks ?? [])
+              .reduce<string | null>((max, x) => (!max || x.updated_at > max ? x.updated_at : max), null)
+              ?? ageing?.entry?.updated_at ?? null
+            const editor = (ageing?.weeks ?? [])
+              .find(x => x.updated_at === lastEdit)?.updated_by_name
+              ?? ageing?.entry?.updated_by_name ?? null
+
+            return (
+              <DataRow
+                label="Ageing Debts"
+                definition={
+                  `Total outstanding invoice balances. Entered manually per week; Monthly Actual is the sum.${
+                    lastEdit
+                      ? ` Last updated ${new Date(lastEdit).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}${editor ? ` by ${editor}` : ''}.`
+                      : canEditAgeing ? ' Type each week into its own box, then press Enter.' : ''
+                  }${
+                    ageing?.source === 'monthly'
+                      ? ' This month was entered as a single monthly figure — type the weeks to replace it.'
+                      : ''
+                  }`
+                }
+                // Drives the muted-vs-real colour of each cell; the nodes below
+                // are what actually render inside them.
+                cells={w.map((_, i) => {
+                  const v = byWeek.get(i + 1)
+                  return v ? fmtCurrency(v.amount) : NO_DATA
+                })}
+                cellNodes={w.map((_, i) => (
+                  <AgeingDebtsCell
+                    key={i}
+                    value={byWeek.get(i + 1)?.amount ?? null}
+                    canEdit={canEditAgeing}
+                    width={86}
+                    title={`Ageing Debts for Week ${i + 1}. Enter saves. Leave it blank to clear this week.`}
+                    onSave={(amount) => onSaveAgeingWeek(i + 1, amount)}
+                    onClear={() => onClearAgeingWeek(i + 1)}
+                  />
+                ))}
+                metricType="Total"
+                monthly={ageing?.total == null ? NO_DATA : fmtCurrency(ageing.total)}
+                alt={nextAlt()}
+              />
+            )
+          })()}
 
           {/* ── MARKETING ── */}
           <SectionHeader label="Marketing" weekCols={w.length} />
@@ -352,14 +523,17 @@ function DashboardTable({ data, ageingDebts, ageingLoading }: { data: DashboardD
 // ── Main Dashboard Page ───────────────────────────────────────
 export default function DashboardPage() {
   const now                 = new Date()
+  const { user }            = useAuthStore()
   const [clinic, setClinic] = useState('newport')
   const [month, setMonth]   = useState(now.getMonth() + 1)
   const [year, setYear]     = useState(now.getFullYear())
   const [loading, setLoading]           = useState(false)
   const [error, setError]               = useState<string | null>(null)
   const [data, setData]                 = useState<DashboardData | null>(null)
-  const [ageingDebts, setAgeingDebts]   = useState<AgeingDebtsData | null>(null)
-  const [ageingLoading, setAgeingLoading] = useState(false)
+  const [ageing, setAgeing]             = useState<AgeingDebtsMonth | null>(null)
+
+  // Only ADMIN may type the Ageing Debts figure; the API enforces it too.
+  const canEditAgeing = user?.role === 'ADMIN'
 
   const fetchData = useCallback(async (forceRefresh = false) => {
     setLoading(true); setError(null)
@@ -373,25 +547,43 @@ export default function DashboardPage() {
     }
   }, [clinic, month, year])
 
-  // Ageing debts is a snapshot (clinic-specific, not month-specific).
-  // Re-fetch whenever the selected clinic changes.
-  const fetchAgeingDebts = useCallback(async (forceRefresh = false) => {
-    setAgeingLoading(true)
+  // The typed Ageing Debts figures are a handful of small rows keyed by clinic
+  // + month, so unlike the old Nookal fetch they can just load with the
+  // dashboard.
+  const fetchAgeing = useCallback(async () => {
     try {
-      const result = await dashboardApi.getAgeingDebts(clinic, { forceRefresh })
-      setAgeingDebts(result)
+      setAgeing(await dashboardApi.getAgeingDebtsManual(clinic, year, month))
     } catch {
-      // Non-fatal — dashboard still works without this
-      setAgeingDebts(null)
-    } finally {
-      setAgeingLoading(false)
+      // Non-fatal — the rest of the dashboard still works without it.
+      setAgeing(null)
     }
-  }, [clinic])
+  }, [clinic, year, month])
+
+  // Both write calls return the recomputed month, so the Monthly Actual total
+  // never has to be re-added on the client and can't drift from the server's.
+  const saveAgeingWeek = useCallback(async (week: number, amount: number) => {
+    try {
+      setAgeing(await dashboardApi.saveAgeingDebtsWeek(clinic, year, month, week, amount))
+      toast.success(`Ageing Debts saved for Week ${week}`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || e.response?.data?.error || 'Failed to save Ageing Debts')
+      // Put the cell back to what the server actually holds.
+      await fetchAgeing()
+    }
+  }, [clinic, year, month, fetchAgeing])
+
+  const clearAgeingWeek = useCallback(async (week: number) => {
+    try {
+      setAgeing(await dashboardApi.clearAgeingDebtsWeek(clinic, year, month, week))
+      toast.success(`Ageing Debts cleared for Week ${week}`)
+    } catch (e: any) {
+      toast.error(e.response?.data?.error?.message || e.response?.data?.error || 'Failed to clear Ageing Debts')
+      await fetchAgeing()
+    }
+  }, [clinic, year, month, fetchAgeing])
 
   useEffect(() => { fetchData() }, [fetchData])
-  // Ageing Debts is NOT auto-fetched — the 10-year Nookal pagination is slow and
-  // dragged the whole dashboard down. Load it on demand with the "Ageing Debts"
-  // button instead, so the normal dashboard/refresh stays fast.
+  useEffect(() => { fetchAgeing() }, [fetchAgeing])
 
   const currentClinic = CLINIC_LIST.find(c => c.id === clinic)
   const years = [2025, 2026, 2027]
@@ -498,6 +690,12 @@ export default function DashboardPage() {
           }
           .print-table-wrap th { position: static !important; font-size: 8pt !important }
           .metric-row:hover td { background: inherit !important }
+          /* On paper the Ageing Debts figure is just a number, not a form field. */
+          .ageing-input {
+            border: none !important; box-shadow: none !important;
+            background: transparent !important; padding: 0 !important;
+            width: auto !important;
+          }
         }
       `}</style>
 
@@ -610,36 +808,9 @@ export default function DashboardPage() {
           ) : '↻ Refresh'}
         </button>
 
-        {/* Ageing Debts — dedicated, on-demand button only (slow 10-year Nookal
-            fetch). Kept off the main load/Refresh so the dashboard stays fast. */}
-        <button
-          onClick={() => fetchAgeingDebts(true)}
-          disabled={ageingLoading}
-          title="Load Ageing Debts — slow 10-year fetch, runs only when clicked"
-          style={{
-            background: ageingLoading ? '#9ca3af' : '#fff',
-            color: ageingLoading ? '#fff' : TEXT,
-            border: '1px solid #e5e7eb', borderRadius: 7,
-            padding: '8px 16px', fontSize: 13, fontWeight: 500,
-            cursor: ageingLoading ? 'not-allowed' : 'pointer',
-            fontFamily: "'DM Sans', sans-serif",
-            transition: 'all 0.15s',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}
-        >
-          {ageingLoading ? (
-            <>
-              <span style={{
-                width: 13, height: 13,
-                border: '2px solid rgba(255,255,255,0.3)',
-                borderTop: '2px solid #fff',
-                borderRadius: '50%', display: 'inline-block',
-                animation: 'spin 0.7s linear infinite',
-              }} />
-              Loading Ageing…
-            </>
-          ) : '💰 Ageing Debts'}
-        </button>
+        {/* The "💰 Ageing Debts" button lived here. Removed 2026-08-11 — the
+            figure is now typed straight into the Monthly Actual cell of the
+            Ageing Debts row instead of pulled from Nookal. */}
 
         <button
           onClick={() => window.print()}
@@ -717,7 +888,13 @@ export default function DashboardPage() {
                 {MONTHS[data.month - 1]} {data.year}
               </div>
             </div>
-            <DashboardTable data={data} ageingDebts={ageingDebts} ageingLoading={ageingLoading} />
+            <DashboardTable
+              data={data}
+              ageing={ageing}
+              canEditAgeing={canEditAgeing}
+              onSaveAgeingWeek={saveAgeingWeek}
+              onClearAgeingWeek={clearAgeingWeek}
+            />
 
             {/* Footer */}
             <div style={{

@@ -24,32 +24,6 @@ export interface PagedDropouts {
 }
 
 /**
- * Result of create(): the caller (route) needs to know whether a row was
- * inserted or an existing one was replaced, so it can pick 201 vs 200 and
- * write the right audit action.
- */
-export interface CreateDropoutResult {
-  row:      DropoutDTO;
-  outcome:  'created' | 'overwritten';
-  /** The row as it looked BEFORE an overwrite — goes into the audit trail. */
-  replaced: DropoutDTO | null;
-}
-
-/**
- * Who may overwrite an existing dropout in place. Intentionally identical to
- * the rule in update(): ADMIN only. When this is false the UI offers the
- * edit-request flow instead — the duplicate guard must not become a way
- * around the approval rules.
- *
- * Tightened with update() on 2026-08-06: while owners could still overwrite
- * their own row here, re-submitting a duplicate entry would have written
- * straight to the DB and bypassed the approval this file now enforces.
- */
-function canOverwriteDropout(scope: RequestScope): boolean {
-  return scope.role === 'ADMIN';
-}
-
-/**
  * Which clinic an entry belongs to. FRONT_DESK_GLOBAL / CLINICIAN / ADMIN have
  * no pinned clinic and choose per entry; FRONT_DESK is pinned by scope so it
  * cannot log against another clinic.
@@ -118,14 +92,10 @@ export const dropoutService = {
       },
       { excludeId: input.exclude_id }
     );
-    return {
-      exact,
-      similar,
-      can_overwrite: exact ? canOverwriteDropout(scope) : false,
-    };
+    return { exact, similar };
   },
 
-  async create(scope: RequestScope, input: CreateDropoutBody): Promise<CreateDropoutResult> {
+  async create(scope: RequestScope, input: CreateDropoutBody): Promise<DropoutDTO> {
     // Resolve clinic for the entry. FRONT_DESK_GLOBAL has no clinic pin and
     // must pick one per entry. CLINICIAN also picks per entry — physios
     // rotate between clinics, so the entry's clinic_id is independent of
@@ -179,39 +149,15 @@ export const dropoutService = {
       await lockDuplicateKey(client, dropoutLockKey(key));
       const { exact, similar } = await dropoutRepository.findDuplicates(key, {}, client);
 
-      // 'allow' = the user saw the diff and confirmed it is a separate entry.
-      if (exact && onDuplicate !== 'allow') {
-        const canOverwrite = canOverwriteDropout(scope);
-
-        if (onDuplicate === 'reject') {
-          throw duplicateConflict<DropoutDTO>('dropout entry', {
-            exact, similar, can_overwrite: canOverwrite,
-          });
-        }
-
-        // onDuplicate === 'overwrite'
-        if (!canOverwrite) {
-          throw Errors.forbidden(
-            'That entry was logged by someone else — submit an edit request so an admin can approve the change'
-          );
-        }
-        await dropoutRepository.update(exact.id, {
-          front_staff_name:            frontStaffName,
-          clinician_id:                input.clinician_id,
-          patient_name:                input.patient_name,
-          date_logged:                 input.date_logged,
-          appointment_cancelled_dates: input.appointment_cancelled_dates ?? [],
-          status:                      input.status,
-          reason:                      input.reason,
-          notes:                       input.notes ?? null,
-        }, scope.userId, client);
-
-        const updated = await dropoutRepository.findJoinedById(exact.id, client);
-        if (!updated) throw Errors.notFound(`Dropout ${exact.id} not found`);
-        return { row: updated, outcome: 'overwritten' as const, replaced: exact };
+      // 409 so the UI can show the diff. 'allow' = the user saw that diff and
+      // chose to save anyway — always honoured, whatever the role. The same
+      // patient on a different appointment date is not even an exact match; it
+      // comes back as `similar` and is only ever a heads-up.
+      if (exact && onDuplicate === 'reject') {
+        throw duplicateConflict<DropoutDTO>('dropout entry', { exact, similar });
       }
 
-      const created = await dropoutRepository.create({
+      return dropoutRepository.create({
         clinic_id:                   clinicId,
         entered_by:                  scope.userId,
         front_staff_name:            frontStaffName,
@@ -223,7 +169,6 @@ export const dropoutService = {
         reason:                      input.reason,
         notes:                       input.notes ?? null,
       }, client);
-      return { row: created, outcome: 'created' as const, replaced: null };
     });
   },
 

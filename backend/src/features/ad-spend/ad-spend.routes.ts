@@ -18,7 +18,9 @@ router.use(authMiddleware);
 router.use(requireRole('ADSPEND', 'ADMIN'));
 
 // POST /api/ad-spend/sync-facebook?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
-router.post('/sync-facebook', requireRole('ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// ADMIN + ADSPEND: the encoder pulls the campaign numbers itself rather than
+// waiting on the CEO to run it (Sam's call 2026-08-12). Still audited either way.
+router.post('/sync-facebook', requireRole('ADMIN', 'ADSPEND'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { date_from, date_to } = req.query as { date_from?: string; date_to?: string };
     if (!date_from || !date_to) {
@@ -32,8 +34,8 @@ router.post('/sync-facebook', requireRole('ADMIN'), async (req: AuthRequest, res
 });
 
 // POST /api/ad-spend/sync-google?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
-// ADMIN only — pulls spend from Google Ads API and upserts into ad_spend table.
-router.post('/sync-google', requireRole('ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// ADMIN + ADSPEND — pulls spend from Google Ads API and upserts into ad_spend.
+router.post('/sync-google', requireRole('ADMIN', 'ADSPEND'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { date_from, date_to } = req.query as { date_from?: string; date_to?: string };
     if (!date_from || !date_to) {
@@ -66,10 +68,12 @@ router.get('/summary', async (req: AuthRequest, res: Response, next: NextFunctio
 });
 
 // GET /api/ad-spend/leads-roi — all-time "Paid (Nookal) vs spend" per platform
-// group (Google vs Meta), sourced from the synced ad-lead totals. ADMIN only:
-// lead revenue is not the ADSPEND encoder's concern.
+// group (Google vs Meta), sourced from the synced ad-lead totals.
+// ADMIN + ADSPEND since 2026-08-12: Sam wants the encoder's Ad Spend page to be
+// identical to his own, and this panel is part of that page. (It used to be
+// admin-only on the grounds that lead revenue was not the encoder's concern.)
 // Must come before /:id so Express doesn't swallow "leads-roi" as an id.
-router.get('/leads-roi', requireRole('ADMIN'), async (req: AuthRequest, res: Response, next: NextFunction) => {
+router.get('/leads-roi', requireRole('ADMIN', 'ADSPEND'), async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const { date_from, date_to } = leadsRoiQuerySchema.parse(req.query);
     res.json(await adSpendService.leadsRoi(date_from, date_to));

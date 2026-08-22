@@ -2,6 +2,7 @@ import { nookalV3 } from '../../services/nookal-v3/client';
 import { env } from '../../config/env';
 import { query } from '../../db/pool';
 import { getWeekRanges } from '../../services/week.calculator';
+import { syncOccupancy, OccupancySyncSummary } from './practitioner-stats.occupancy-api';
 
 /**
  * Nookal → Practitioner Stats sync.
@@ -18,6 +19,19 @@ import { getWeekRanges } from '../../services/week.calculator';
  *
  * Validated live for Week 1 July 2026 against the spreadsheet: Total Appts
  * matched 9 of 10 practitioners exactly and NC matched 10 of 10.
+ *
+ * This sync deliberately does NOT touch Occupancy.
+ *
+ * It could: practitioner-stats.occupancy.ts derives booked ÷ (booked +
+ * still-bookable) from the diary, and that code is kept and still runs behind
+ * `npm run verify:occupancy`. But it is not the measure Nookal reports, and
+ * compared against Nookal's own Occupancy report for the week of 3 Aug 2026 it
+ * ran up to 23 points high and put 5 of 11 practitioners in the WRONG zone —
+ * always the flattering way (Isabella read 80.00% "thriving" where Nookal says
+ * 56.96% "reset"). Sam's call, 2026-08-20: a blank cell beats a confident wrong
+ * one, so Occupancy is filled only by the report import or by hand.
+ *
+ * See docs/OCCUPANCY_2026-08-20.md and db/import-occupancy-nookal.ts.
  */
 
 // ── GraphQL ────────────────────────────────────────────────────────────────
@@ -48,6 +62,12 @@ const APPTS_BY_PROVIDER_QUERY = /* GraphQL */ `
       appointmentDate
       isNewCase
       status
+      # Occupancy needs the window each appointment occupies, and apptType to
+      # tell a real consultation from a blockout or a diary note. Added here
+      # rather than in a second query — this fetch already walks the whole month.
+      startTime
+      endTime
+      apptType
     }
   }
 `;
@@ -67,6 +87,11 @@ interface ApptRow {
   appointmentDate: string;
   isNewCase:       number;
   status:          string | null;
+  /** "HH:MM:SS". Occupancy only — the appointment counts do not use these. */
+  startTime:       string | null;
+  endTime:         string | null;
+  /** Consultation | Class | DiaryEvent | DiaryNote. */
+  apptType:        string | null;
 }
 
 /** All three clinic locations — the SOP reads these figures with the Nookal
@@ -224,14 +249,32 @@ export interface SyncResult {
   /** Providers seen in the appointment feed with no mapped user — their
    *  appointments are NOT counted, and silence about that would read as zero. */
   unmappedProviderIds: number[];
+
+  /**
+   * Practitioner-weeks this sync touched that still have no Occupancy — nothing
+   * imported off the Nookal report and nothing typed in. Reported so a blank
+   * column reads as "export the report", not as an oversight.
+   */
+  occupancyNeedsImport: number;
+
+  /**
+   * What the Occupancy pass did, or null if it failed.
+   *
+   * Occupancy is measured from the Nookal v2 roster (migration 031) and only for
+   * weeks still fresh enough for that roster to describe them, so a month of old
+   * weeks legitimately reports nothing written. Null means the pass itself threw
+   * — the appointment figures above are still good, and the reason is logged.
+   */
+  occupancy: OccupancySyncSummary | null;
 }
 
 /**
  * Pull one month of appointments and write per-practitioner weekly figures.
  *
- * Writes total_appts, new_cases and cancelled_count. Leaves occupancy_pct
- * untouched — Nookal exposes no working-hours figure, so whatever a human
- * entered there must survive.
+ * Writes total_appts, new_cases and cancelled_count, and — since migration 031 —
+ * Occupancy too, for weeks recent enough that Nookal's roster still describes
+ * them. Occupancy is never CLEARED here, and never overwrites a figure someone
+ * typed in or imported off the report.
  */
 export async function syncMonth(
   year:  number,
@@ -254,7 +297,20 @@ export async function syncMonth(
   const appts = await fetchAppointments(dateFrom, dateTo);
 
   const seenUnmapped = new Set<number>();
-  let rowsWritten = 0;
+  let rowsWritten          = 0;
+  let occupancyNeedsImport = 0;
+
+  // Occupancy first, so the occupancyNeedsImport tally below counts what is
+  // still missing AFTER this pass rather than before it. It is measured from a
+  // different set of endpoints (getSchedules / getEvents) and is allowed to fail
+  // on its own: a roster hiccup must not cost the appointment figures, which are
+  // the reason someone pressed Sync.
+  let occupancy: OccupancySyncSummary | null = null;
+  try {
+    occupancy = await syncOccupancy(year, month, actingUserId);
+  } catch (e) {
+    console.error(`[practitioner-stats] occupancy pass failed, appointments unaffected: ${(e as Error).message}`);
+  }
 
   for (const w of weeks) {
     const weekNum = w.weekNum === 'remainder' ? 5 : w.weekNum;
@@ -295,6 +351,18 @@ export async function syncMonth(
         [userId, year, month, weekNum, v.completed, v.nc, v.cancelled, actingUserId]
       );
       rowsWritten += 1;
+
+      // Counted after the occupancy pass above has had its go. A week still
+      // blank here is one Nookal's roster could no longer describe, so it needs
+      // the Occupancy report exported and imported, or typing in.
+      const { rows: occ } = await query<{ occupancy_pct: string | null }>(
+        `SELECT occupancy_pct FROM practitioner_week_inputs
+          WHERE clinician_id = $1 AND year = $2 AND month = $3 AND week_num = $4`,
+        [userId, year, month, weekNum]
+      );
+      if (occ[0]?.occupancy_pct === null || occ[0]?.occupancy_pct === undefined) {
+        occupancyNeedsImport += 1;
+      }
     }
   }
 
@@ -305,5 +373,7 @@ export async function syncMonth(
     rowsWritten,
     mapping,
     unmappedProviderIds: [...seenUnmapped],
+    occupancyNeedsImport,
+    occupancy,
   };
 }

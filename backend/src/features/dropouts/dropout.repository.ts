@@ -359,7 +359,7 @@ export const dropoutRepository = {
   },
 
   /**
-   * Unscoped joined read. Used by create() / overwrite() to build the response
+   * Unscoped joined read. Used by create() to build the response
    * from INSIDE their own transaction — a scoped read on a pooled connection
    * would run on a different session and not see the uncommitted row.
    */

@@ -8,6 +8,7 @@ import { userRepository, canBeTreatingClinician } from '../../repositories/user.
 import { RequestScope } from '../../middleware/auth.middleware';
 import { withTransaction } from '../../db/pool';
 import { Errors } from '../../shared/errors';
+import { seesAllAdLeadClinics } from '../../shared/roles';
 import { CreateEditRequestBody } from './edit-request.validators';
 import { notifyEditRequest } from '../../services/teams-notify.service';
 
@@ -64,8 +65,27 @@ async function loadEntity(
   return null;
 }
 
+/**
+ * Front desk works the same shared queue, so any of them may correct any entry
+ * they can already SEE — mirrors the list scope exactly: FRONT_DESK_GLOBAL sees
+ * every clinic, FRONT_DESK is pinned to its own.
+ *
+ * Sam, 2026-08-12: "make it so all frontstaff can edit each others entries."
+ * Only the ownership gate moved — the edit still goes to him for approval, and
+ * delete requests are deliberately NOT included (see delete-request.service).
+ */
+function frontDeskCanSee(scope: RequestScope, entityClinicId: string | null): boolean {
+  return (
+    scope.role === 'FRONT_DESK_GLOBAL' ||
+    (scope.role === 'FRONT_DESK' && entityClinicId === scope.clinic_id)
+  );
+}
+
 export const editRequestService = {
-  /** Non-admin submits a proposed edit + mandatory reason for one of their own entries. */
+  /**
+   * Non-admin submits a proposed edit + mandatory reason. Front desk may do this
+   * for any entry in their scope; a clinician only for entries they encoded.
+   */
   async create(scope: RequestScope, body: CreateEditRequestBody): Promise<EditRequestDTO> {
     if (scope.role === 'ADMIN') {
       throw Errors.validation('ADMIN edits entries directly — no request needed');
@@ -76,14 +96,22 @@ export const editRequestService = {
 
     if (body.entity_type === 'ad_lead') {
       // Ad-leads are a shared team inbox (many bulk-imported under one account),
-      // so ANY front-desk user who can SEE the lead may request edits — not just
-      // whoever first encoded it. Visibility mirrors ad-leads list scope:
-      // FRONT_DESK_GLOBAL sees every clinic; FRONT_DESK is pinned to their own.
+      // so ANY login that can SEE the lead may request edits — not just whoever
+      // first encoded it. Since 2026-08-12 that includes the ad-spend encoder:
+      // this request flow is its ONLY way to correct a lead (ad-leads.service
+      // still refuses its direct PATCH).
       const canSee =
-        scope.role === 'FRONT_DESK_GLOBAL' ||
+        seesAllAdLeadClinics(scope.role) ||
         (scope.role === 'FRONT_DESK' && entity.clinic_id === scope.clinic_id);
       if (!canSee) throw Errors.forbidden('You cannot request edits for this lead');
+    } else if (scope.role === 'FRONT_DESK' || scope.role === 'FRONT_DESK_GLOBAL') {
+      // Dropout / case acceptance: front desk covers for each other, so the rule
+      // is "can you see it", not "did you type it" (changed 2026-08-12).
+      if (!frontDeskCanSee(scope, entity.clinic_id)) {
+        throw Errors.forbidden('You cannot request edits for this entry');
+      }
     } else if (entity.entered_by !== scope.userId) {
+      // CLINICIAN — unchanged: their own entries only.
       throw Errors.forbidden('You can only request edits to your own entries');
     }
 
