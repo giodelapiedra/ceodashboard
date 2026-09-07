@@ -371,6 +371,11 @@ export const PAGE_LIMIT_MAX     = 200;
  * a booking). Kept in step with practitioner-stats.repository's
  * CANCELLATION_STATUSES — the same figure must not read two ways.
  *
+ * Counted per ENTRY on date_logged - the day the entry was made, the same day
+ * the Patient Dropout Tracking list is filtered by - not on a cancelled date.
+ * Same rule as practitioner-stats' cancellation_dropouts, so the KPI form and
+ * the board cannot disagree.
+ *
  * Queried directly here rather than through practitioner-stats.repository's
  * cancellationsByDay: that module has known drift between this codebase and
  * what is actually deployed on prod (see [[project_occupancy_nookal]] /
@@ -635,17 +640,10 @@ export const weeklyKpiRepository = {
     const { rows } = await query<{ n: string }>(
       `SELECT COUNT(*)::bigint AS n
          FROM patient_dropouts d
-         CROSS JOIN LATERAL (
-           SELECT MAX(cd) AS last_cd FROM unnest(
-             CASE WHEN cardinality(d.appointment_cancelled_dates) > 0
-                  THEN d.appointment_cancelled_dates
-                  ELSE ARRAY[d.date_logged] END
-           ) AS cd
-         ) AS agg
         WHERE d.clinician_id = $1
           AND d.status = ANY($2::text[])
-          AND agg.last_cd >= $3::date
-          AND agg.last_cd <= $4::date`,
+          AND d.date_logged >= $3::date
+          AND d.date_logged <= $4::date`,
       [clinicianId, CANCELLATION_DROPOUT_STATUSES, dateFrom, dateTo]
     );
     return Number(rows[0]?.n ?? 0);

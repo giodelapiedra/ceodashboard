@@ -61,7 +61,13 @@ export interface CancellationDayRow {
   churns: number;
   /**
    * The Cancellation % numerator: Patient Dropout Tracking entries, counted per
-   * ENTRY and bucketed exactly like churns.
+   * ENTRY and bucketed on **date_logged** - the day the entry was made, which
+   * is the date the tracking list itself is filtered and counted by.
+   *
+   * Deliberately NOT bucketed like churns (on the last cancelled date). Sam,
+   * 2026-09-07: "Total entries ng Patient Dropout Tracking per clinician
+   * divided by Total Appts". An entry logged on Tuesday for an appointment
+   * cancelled next Monday is one of THIS week's entries.
    *
    * Sam restated the rule 2026-09-07: EVERY entry the front desk logged for
    * that clinician counts EXCEPT 'Completed Treatment Plan' — a patient who
@@ -116,6 +122,18 @@ const CHURN_STATUSES = [
   'Cancelled - not rescheduled',
   'No Future Bookings',
   'Completed Treatment Plan',
+];
+
+/**
+ * What the dropout query actually FETCHES: the union of both lists above.
+ *
+ * Since 2026-09-07 the two lists cross rather than nest ('Re-scheduled' is a
+ * cancellation but not a churn; 'Completed Treatment Plan' is a churn but not a
+ * cancellation), so fetching only one of them would silently zero out part of
+ * the other metric. Each fetched row is then classified against both sets.
+ */
+const DROPOUT_QUERY_STATUSES = [
+  ...new Set([...CHURN_STATUSES, ...CANCELLATION_STATUSES]),
 ];
 
 /** One practitioner-week's hand-entered Nookal figures (migration 024). */
@@ -236,7 +254,12 @@ export const practitionerStatsRepository = {
            ELSE ARRAY[d.date_logged] END
     `;
 
-    const [events, churns] = await Promise.all([
+    // The Cancellation % numerator is bucketed on date_logged, NOT on a
+    // cancelled date: Sam, 2026-09-07, defines it as the number of Patient
+    // Dropout Tracking ENTRIES for that clinician that week, which is what the
+    // tracking list itself shows and counts. Its own query, because events and
+    // churns answer different questions on different dates (see above).
+    const [events, churns, entries] = await Promise.all([
       query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
         `SELECT d.clinician_id, d.clinic_id, cd::date AS day, COUNT(*)::bigint AS n
            FROM patient_dropouts d
@@ -247,10 +270,13 @@ export const practitionerStatsRepository = {
           GROUP BY d.clinician_id, d.clinic_id, cd::date`,
         [dateFrom, dateTo, clinicId]
       ),
-      // Churns and the Cancellation % numerator come out of ONE query, grouped by
-      // status, rather than two queries with two status lists. They must agree
-      // about which patients stopped and when — a second query with its own
-      // date bucketing is a place for them to silently diverge.
+      // Churns and the Cancellation % numerator come out of ONE query, grouped
+      // by status and classified in code, rather than two queries with two
+      // status lists. They must agree about which patients stopped and when — a
+      // second query with its own date bucketing is a place for them to
+      // silently diverge. The fetch list is the UNION of both classifications
+      // (DROPOUT_QUERY_STATUSES); filtering it to one of them would zero out
+      // part of the other.
       query<{ clinician_id: string; clinic_id: string; day: Date; status: string; n: string }>(
         `SELECT d.clinician_id, d.clinic_id, last_cd::date AS day, d.status, COUNT(*)::bigint AS n
            FROM patient_dropouts d
@@ -262,7 +288,17 @@ export const practitionerStatsRepository = {
             AND agg.last_cd <= $2::date
             AND ($3::text IS NULL OR d.clinic_id = $3)
           GROUP BY d.clinician_id, d.clinic_id, last_cd::date, d.status`,
-        [dateFrom, dateTo, clinicId, CHURN_STATUSES]
+        [dateFrom, dateTo, clinicId, DROPOUT_QUERY_STATUSES]
+      ),
+      query<{ clinician_id: string; clinic_id: string; day: Date; n: string }>(
+        `SELECT d.clinician_id, d.clinic_id, d.date_logged::date AS day, COUNT(*)::bigint AS n
+           FROM patient_dropouts d
+          WHERE d.status = ANY($4::text[])
+            AND d.date_logged >= $1::date
+            AND d.date_logged <= $2::date
+            AND ($3::text IS NULL OR d.clinic_id = $3)
+          GROUP BY d.clinician_id, d.clinic_id, d.date_logged::date`,
+        [dateFrom, dateTo, clinicId, CANCELLATION_STATUSES]
       ),
     ]);
 
@@ -286,12 +322,16 @@ export const practitionerStatsRepository = {
     for (const r of events.rows) {
       slot(r.clinician_id, r.clinic_id, isoDay(r.day)).cancellations += Number(r.n);
     }
-    const isCancellation = new Set(CANCELLATION_STATUSES);
+    // Two independent tests, not a subset check: a 'Re-scheduled' entry is a
+    // cancellation and NOT a churn, so adding every fetched row to churns would
+    // inflate that column the moment the cancellation list widened.
+    const isChurn = new Set(CHURN_STATUSES);
     for (const r of churns.rows) {
-      const row = slot(r.clinician_id, r.clinic_id, isoDay(r.day));
-      const n   = Number(r.n);
-      row.churns += n;
-      if (isCancellation.has(r.status)) row.cancellation_dropouts += n;
+      if (!isChurn.has(r.status)) continue;
+      slot(r.clinician_id, r.clinic_id, isoDay(r.day)).churns += Number(r.n);
+    }
+    for (const r of entries.rows) {
+      slot(r.clinician_id, r.clinic_id, isoDay(r.day)).cancellation_dropouts += Number(r.n);
     }
 
     return [...merged.values()];
