@@ -5,30 +5,34 @@ export type SheetWeekRange = WeekRange & { weekNum: SheetWeekNum };
 
 /**
  * Build 4 Monday-anchored 7-day weeks for a calendar month, plus a Remainder
- * range for the tail, to MATCH the CEO scorecard Google Sheet exactly.
+ * range for the tail, to MATCH the Practitioner Stats Google Sheet exactly.
  *
- * The sheet's convention (confirmed by Sam, 2026-07-20):
+ * The sheet's convention (Sam, 2026-09-07, correcting the 2026-07-20 reading):
  *   - A week runs Monday -> Sunday.
- *   - Week 1 starts on the FIRST Monday on/after the 1st of the month.
- *       May 2026 (1st = Fri) -> Week 1 [4-10], [11-17], [18-24], [25-31]
- *       Mar 2026 (1st = Sun) -> Week 1 [2-8],  [9-15],  [16-22], [23-29]
+ *   - Week 1 is the first Mon-Sun week that BELONGS to the month, and it may
+ *     start in the previous month:
+ *       Sep 2026 (1st = Tue) -> W1 [31/8-6/9], [7-13], [14-20], [21-27], Rem [28-30]
+ *       Aug 2026 (1st = Sat) -> W1 [3-9],      [10-16], [17-23], [24-30], Rem [31]
+ *     Sam's words: "ang lumabas sa kanya 31/8 example Week 1 - 31-6/9 una week
+ *     ng September ganon kada week".
+ *   - "Belongs to the month" = the Mon-Sun block holds at least 4 of the
+ *     month's days, i.e. the block containing the 4th. August 2026 opens on a
+ *     Saturday, so Sat 1 + Sun 2 sit in the Jul 27-Aug 2 block, only 2 days of
+ *     August, and Cath starts August on the 3rd; September's Aug 31 block holds
+ *     6 days of September, so she pulls Aug 31 in. This rule reproduces every
+ *     Mon-Sun tab she has built: see verifySheetGridRule below.
  *   - Weeks 2-4 follow consecutively (7 days each), capped at the month end.
- *   - Remainder = whatever's left after Week 4's Sunday, up to the last day
- *       (Mar 2026 -> [30-31]; May 2026 -> empty, month ends on a Sunday).
+ *   - Remainder = whatever is left after Week 4's Sunday, up to the last day.
  *
- * The days BEFORE the first Monday (e.g. Jul 1-5) are NOT part of Weeks 1-4.
- * They used to be described as belonging to the previous month's grid, but no
- * month's grid crosses its own last day, so nothing ever counted them: 11 of
- * 12 months in 2026 had a hole, and 2026 YTD that hid 65 case-acceptance
- * entries, 113 dropouts, $2,523 of ad spend and $41,365.56 of July revenue from
- * every dashboard view (found 2026-08-06).
+ * Only Week 1 may reach back into the previous month; nothing reaches forward,
+ * so a month's last days always land in that month's own Remainder.
  *
- * getWeekRanges() below is UNCHANGED and still matches the sheet — the
- * practitioner-stats sheet and the weekly Teams notifier depend on it. The CEO
- * dashboard now uses getDashboardRanges(), which numbers differently; see there.
+ * Until 2026-09-07 Week 1 started on the first Monday ON/AFTER the 1st, which
+ * left the days before it in no column at all: for Sep 2026 that hid Sep 1-6
+ * from every practitioner-stats view.
  *
- * (Previously these were fixed day-of-month blocks — days 1-7, 8-14, ... —
- * which drifted up to 6 days off the sheet's Mon-Sun columns.)
+ * The CEO dashboard does NOT use this function. It uses getDashboardRanges()
+ * below, which numbers differently on purpose; see there.
  */
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -45,40 +49,101 @@ function firstMondayOf(year: number, month: number): number {
   return 1; // unreachable
 }
 
+/**
+ * The Monday that opens the sheet's Week 1: the Monday of the Mon-Sun block
+ * holding the 4th of the month. A real Date, because it can fall in the
+ * PREVIOUS month (Sep 2026 -> Mon 31 Aug).
+ *
+ * Why the 4th: a Mon-Sun block contains the 4th exactly when it holds 4 or more
+ * of that month's days, which is the rule Cath's own tabs follow. See the
+ * getWeekRanges doc block above.
+ */
+function week1MondayOf(year: number, month: number): Date {
+  const d   = new Date(year, month - 1, 4);
+  const dow = d.getDay();                        // 0 = Sunday, 1 = Monday
+  const backToMonday = dow === 0 ? 6 : dow - 1;  // Sunday is 6 days past Monday
+  d.setDate(d.getDate() - backToMonday);
+  return d;
+}
+
+/** `YYYY-MM-DD` for a Date, from local components (never toISOString). */
+function isoOf(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** `d` shifted by `n` days, as a new Date. */
+function plusDays(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + n);
+  return out;
+}
+
 export function getWeekRanges(year: number, month: number): SheetWeekRange[] {
   const lastDay  = new Date(year, month, 0).getDate();
-  const monthStr = `${year}-${pad(month)}`;
-  const dateOf   = (d: number) => `${monthStr}-${pad(d)}`;
-  const firstMon = firstMondayOf(year, month);
+  const monthEnd = `${year}-${pad(month)}-${pad(lastDay)}`;
+  const week1Mon = week1MondayOf(year, month);
+
+  /** Labels a span the way the sheet does: `[3-9]`, `[31-6]`, `[31]`. */
+  const label = (name: string, from: string, to: string): string => {
+    const a = Number(from.slice(8));
+    const b = Number(to.slice(8));
+    return `${name} [${a === b ? a : `${a}-${b}`}]`;
+  };
 
   const weeks: SheetWeekRange[] = [];
   for (let i = 0; i < 4; i++) {
-    const start = firstMon + i * 7;
-    const end   = Math.min(start + 6, lastDay);
+    const from  = isoOf(plusDays(week1Mon, i * 7));
+    // Clamped at the month end: only Week 1 reaches into the previous month,
+    // nothing reaches into the next one.
+    const rawTo = isoOf(plusDays(week1Mon, i * 7 + 6));
+    const to    = rawTo > monthEnd ? monthEnd : rawTo;
     weeks.push({
       weekNum:  (i + 1) as 1 | 2 | 3 | 4,
-      label:    `Week ${i + 1} [${start}-${end}]`,
-      dateFrom: dateOf(start),
-      dateTo:   dateOf(end),
+      label:    label(`Week ${i + 1}`, from, to),
+      dateFrom: from,
+      dateTo:   to,
     });
   }
 
-  const remStart = firstMon + 28;
-  const remainder: SheetWeekRange = remStart <= lastDay
+  const remFrom = isoOf(plusDays(week1Mon, 28));
+  const remainder: SheetWeekRange = remFrom <= monthEnd
     ? {
         weekNum:  'remainder',
-        label:    `Remainder [${remStart}-${lastDay}]`,
-        dateFrom: dateOf(remStart),
-        dateTo:   dateOf(lastDay),
+        label:    label('Remainder', remFrom, monthEnd),
+        dateFrom: remFrom,
+        dateTo:   monthEnd,
       }
     : {
-        // Month ends on/before Week 4's Sunday — nothing left over.
+        // Month ends on/before Week 4's Sunday: nothing left over.
         weekNum:  'remainder',
         label:    'Remainder [—]',
         ...EMPTY_RANGE,
       };
 
   return [...weeks, remainder];
+}
+
+/**
+ * Checks the computed Week 1 against every tab Cath has actually built
+ * (SHEET_GRID below), so the rule above is asserted rather than claimed.
+ *
+ * Her Mon-Fri tabs (Jun 2025 - Apr 2026) are included: those columns end on a
+ * Friday, so only their START is comparable, and the start is what is compared.
+ * `expectedMismatch` marks the tabs where she deliberately did something else
+ * (May and Jul 2025 start Week 1 on the 1st, and Oct 2025 / Jan 2026 / Apr 2026
+ * park the pre-first-Monday days in the Remainder column instead).
+ */
+export function verifySheetGridRule(): { ym: string; sheet: string; computed: string; ok: boolean }[] {
+  const out: { ym: string; sheet: string; computed: string; ok: boolean }[] = [];
+  for (const [ym, cols] of Object.entries(SHEET_GRID)) {
+    const first = cols[0];
+    if (!first) continue;
+    const year  = Number(ym.slice(0, 4));
+    const month = Number(ym.slice(5, 7));
+    const computed = isoOf(week1MondayOf(year, month));
+    out.push({ ym, sheet: first[0], computed, ok: first[0] === computed });
+  }
+  return out;
 }
 
 /**

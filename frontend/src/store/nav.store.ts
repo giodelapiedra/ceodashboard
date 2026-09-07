@@ -13,9 +13,12 @@ export type AppPage =
   | 'admin-edit-requests'
   | 'admin-activity-log'
   | 'admin-clinician-profile'
+  | 'admin-weekly-kpi'
   | 'dropout-entry'
   | 'case-acceptance-entry'
   | 'ad-leads-entry'
+  | 'weekly-kpi'
+  | 'my-profile'
   | 'drafts'
   | 'ad-spend-entry'
   | 'clinician-home'
@@ -36,9 +39,12 @@ export const PAGE_PATH: Record<AppPage, string> = {
   'admin-edit-requests':       '/admin/edit-requests',
   'admin-activity-log':        '/admin/activity-log',
   'admin-clinician-profile':   '/admin/clinician-profile',
+  'admin-weekly-kpi':          '/admin/weekly-kpi',
   'dropout-entry':             '/dropout-entry',
   'case-acceptance-entry':     '/case-acceptance-entry',
   'ad-leads-entry':            '/ad-leads-entry',
+  'weekly-kpi':                '/weekly-kpi',
+  'my-profile':                '/my-profile',
   'drafts':                    '/drafts',
   'ad-spend-entry':            '/ad-spend',
   'clinician-home':            '/clinician-home',

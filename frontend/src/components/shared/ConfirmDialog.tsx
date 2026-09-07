@@ -25,9 +25,12 @@ export default function ConfirmDialog() {
   useEffect(() => {
     if (!current) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); resolve(false) }
+      // Esc is 'dismiss', not 'cancel': a dialog whose cancel button is a real
+      // second action (see ConfirmOutcome) must not fire it on a key press
+      // whose whole meaning is "get me out of here".
+      if (e.key === 'Escape') { e.preventDefault(); resolve('dismiss') }
       else if (e.key === 'Enter' && document.activeElement !== confirmBtnRef.current) {
-        e.preventDefault(); resolve(true)
+        e.preventDefault(); resolve('confirm')
       }
     }
     document.addEventListener('keydown', onKey)
@@ -47,7 +50,7 @@ export default function ConfirmDialog() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-title"
-      onClick={(e) => { if (e.target === e.currentTarget) resolve(false) }}
+      onClick={(e) => { if (e.target === e.currentTarget) resolve('dismiss') }}
       style={{
         position: 'fixed', inset: 0, zIndex: 9000,
         background: 'rgba(15, 23, 42, 0.45)',
@@ -95,7 +98,7 @@ export default function ConfirmDialog() {
           display: 'flex', justifyContent: 'flex-end', gap: 8,
         }}>
           <button
-            onClick={() => resolve(false)}
+            onClick={() => resolve('cancel')}
             style={{
               background: '#fff', color: TEXT,
               border: `1px solid ${BORDER}`, borderRadius: 7,
@@ -105,7 +108,7 @@ export default function ConfirmDialog() {
           >{cancelLabel}</button>
           <button
             ref={confirmBtnRef}
-            onClick={() => resolve(true)}
+            onClick={() => resolve('confirm')}
             style={{
               background: destructive ? DANGER : TEAL,
               color: '#fff', border: 'none', borderRadius: 7,

@@ -24,13 +24,6 @@ const EnvSchema = z.object({
   NOOKAL_V3_CLIENT_ID:     z.string().min(1),
   NOOKAL_V3_CLIENT_SECRET: z.string().min(1),
 
-  // ── Nookal Web Credentials (for browser-based occupancy scraping) ─────────
-  // These are the login credentials for the Nookal web app, used by Puppeteer
-  // to scrape the Occupancy report which has no API endpoint.
-  NOOKAL_WEB_URL:        z.string().url().default('https://auzone3.nookal.com'),
-  NOOKAL_WEB_COMPANY_ID: z.string().min(1).optional(),
-  NOOKAL_WEB_EMAIL:      z.string().email().optional(),
-  NOOKAL_WEB_PASSWORD:   z.string().min(1).optional(),
   // Real v3 location IDs (integers, different from v2 IDs). Discovered via
   // the `locations` query on 2026-04-22.
   NOOKAL_V3_LOCATION_NEWPORT:   z.coerce.number().int().default(1),
@@ -60,6 +53,11 @@ const EnvSchema = z.object({
   // Teams group. The URL embeds its own `sig=` signature, so treat it as a
   // SECRET: .env only (chmod 600), never in the repo or a log line.
   TEAMS_WEBHOOK_URL: z.string().url().optional(),
+
+  // Separate flow, separate URL — this one only fires on a Weekly KPI form
+  // submit. Kept apart from TEAMS_WEBHOOK_URL above (disabled 2026-08-06) so
+  // turning this on does not also revive the edit/delete-request alerts.
+  TEAMS_KPI_WEBHOOK_URL: z.string().url().optional(),
 
   CEO_EMAIL:    z.string().email(),
   CEO_PASSWORD: z.string().min(8),

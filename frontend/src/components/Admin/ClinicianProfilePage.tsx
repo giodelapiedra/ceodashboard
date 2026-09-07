@@ -17,6 +17,9 @@ import { toast } from '../../store/toast.store'
 import { confirmDialog } from '../../store/confirm.store'
 import { promptDialog } from '../../store/prompt.store'
 import { useNavStore } from '../../store/nav.store'
+import { useAuthStore } from '../../store/auth.store'
+import { useWeeklyKpiUnreadStore } from '../../store/weeklyKpiUnread.store'
+import WeeklyKpiHistory from '../WeeklyKpi/WeeklyKpiHistory'
 
 const TEAL      = '#0f6e56'
 const TEXT      = '#111827'
@@ -28,7 +31,7 @@ const ROLES: Role[]       = ['ADMIN', 'CLINICIAN', 'FRONT_DESK', 'FRONT_DESK_GLO
 const CLINICS: ClinicId[] = ['newport', 'narrabeen', 'brookvale']
 const PAGE_SIZE = 50
 
-type ProfileTab = 'dropouts' | 'case-acceptance'
+type ProfileTab = 'dropouts' | 'case-acceptance' | 'weekly-kpi'
 type TpFilter   = '' | 'Y' | 'N'
 
 function todayISO(): string {
@@ -44,10 +47,44 @@ function pct(n: number, d: number): string {
   return ((n / d) * 100).toFixed(1)
 }
 
-export default function ClinicianProfilePage() {
+/**
+ * Two pages, one component.
+ *
+ *   * `/admin/clinician-profile?clinician_id=…` — the super admin reading one
+ *     physio, with the account controls (edit, reset password, deactivate) and
+ *     the per-entry Delete buttons.
+ *   * `/my-profile` (`selfMode`) — the SAME page, the physio reading their own
+ *     data, with every one of those controls gone.
+ *
+ * `selfMode` was added on 2026-08-24 after a first attempt shipped a separate
+ * hand-built profile page for the physio. Sam's reaction was the right one:
+ * *"baket ka pa gumawa ng sarili ui profile ng clinician, diba meron na 'un ui
+ * pagination format dito"*. Two pages showing the same three tabs of the same
+ * data is two tables to keep in step, and they only ever drift apart. The
+ * filters, the summary cards, the tables and the pagination below are shared;
+ * the differences are all read off this one flag.
+ *
+ * What selfMode changes, and nothing else:
+ *   * the physio comes from the session, never from a query string — a
+ *     clinician_id in the URL must not be able to open a colleague's profile
+ *     (the server would refuse it anyway; this makes it unreachable);
+ *   * no account controls and no edit modal — an account does not administer
+ *     itself;
+ *   * no per-row Delete — a physio cannot delete a dropout / case-acceptance
+ *     entry (the server requires ADMIN or an approved delete request), so the
+ *     button would only ever produce an error;
+ *   * the weekly KPI tab opens first and calls the "my own" endpoint.
+ */
+export default function ClinicianProfilePage({ selfMode = false }: { selfMode?: boolean } = {}) {
   const [searchParams] = useSearchParams()
-  const clinicianId = searchParams.get('clinician_id') ?? ''
+  const { user: sessionUser } = useAuthStore()
+  // In selfMode the id comes off the session. Reading it from the URL here is
+  // what would make "?clinician_id=someone-else" worth trying.
+  const clinicianId = selfMode
+    ? (sessionUser?.id ?? '')
+    : (searchParams.get('clinician_id') ?? '')
   const { navigate } = useNavStore()
+  const kpiUnread = useWeeklyKpiUnreadStore(s => s.total)
 
   const [user,        setUser]        = useState<User | null>(null)
   const [loadingUser, setLoadingUser] = useState(true)
@@ -59,7 +96,9 @@ export default function ClinicianProfilePage() {
   const [editClinic, setEditClinic] = useState<ClinicId | null>(null)
   const [saving,     setSaving]     = useState(false)
 
-  const [tab, setTab] = useState<ProfileTab>('dropouts')
+  // The admin lands on dropouts (what he came to check); the physio lands on
+  // their weekly KPI, which is where Sam's comments are.
+  const [tab, setTab] = useState<ProfileTab>(selfMode ? 'weekly-kpi' : 'dropouts')
 
   // ── Dropout filters ───────────────────────────────────────────────────────
   const [dDateFrom,     setDDateFrom]     = useState(daysAgoISO(30))
@@ -90,6 +129,14 @@ export default function ClinicianProfilePage() {
 
   // ── Load user ─────────────────────────────────────────────────────────────
   useEffect(() => {
+    // selfMode reads the account off the session: /api/users/:id is ADMIN-only,
+    // and the session already carries everything this header shows.
+    if (selfMode) {
+      if (sessionUser) { setUser(sessionUser); setUserError('') }
+      else             { setUserError('Not signed in') }
+      setLoadingUser(false)
+      return
+    }
     if (!clinicianId) {
       setUserError('No clinician ID provided')
       setLoadingUser(false)
@@ -108,7 +155,8 @@ export default function ClinicianProfilePage() {
         setUserError(e.response?.data?.error?.message ?? 'Failed to load user')
         setLoadingUser(false)
       })
-  }, [clinicianId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clinicianId, selfMode, sessionUser?.id])
 
   // ── Reset dropout page when filters change ────────────────────────────────
   useEffect(() => { setDropoutsOffset(0) }, [dDateFrom, dDateTo, dStatus, dReason, dSearch])
@@ -301,7 +349,7 @@ export default function ClinicianProfilePage() {
     return (
       <AppShell title="Clinician Profile">
         <div className="pw-page" style={{ padding: '20px 28px' }}>
-          <BackBtn onClick={() => navigate('admin-users')} />
+          <BackBtn onClick={() => navigate(selfMode ? 'clinician-home' : 'admin-users')} />
           <div style={{
             background: '#fef2f2', border: '1px solid #fecaca', color: DANGER,
             borderRadius: 8, padding: '12px 16px', fontSize: 13, marginTop: 16,
@@ -321,7 +369,32 @@ export default function ClinicianProfilePage() {
   return (
     <AppShell title="">
       <div className="pw-page" style={{ padding: '20px 28px', fontFamily: "'DM Sans', sans-serif" }}>
-        <BackBtn onClick={() => navigate('admin-users')} />
+        <BackBtn
+          label={selfMode ? 'Home' : 'Back to User Management'}
+          onClick={() => navigate(selfMode ? 'clinician-home' : 'admin-users')}
+        />
+
+        {/* The comment notification, on the page a physio may land on first.
+            Sam never sees this line: his unread count is about threads he is
+            already in, and the tracker is where he reads them. */}
+        {selfMode && kpiUnread > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+            background: '#f0faf7', border: '1px solid #cdebde', borderRadius: 10,
+            padding: '11px 15px', marginTop: 12, fontSize: 13, color: TEXT,
+          }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: TEAL, flexShrink: 0 }} />
+            <strong style={{ fontWeight: 700 }}>
+              {kpiUnread} new comment{kpiUnread === 1 ? '' : 's'} from Sam
+            </strong>
+            <span style={{ color: TEXT_SOFT }}>on your weekly KPI — open a week below to read and reply.</span>
+            {tab !== 'weekly-kpi' && (
+              <button onClick={() => setTab('weekly-kpi')} style={{ ...smallBtnStyle, marginLeft: 'auto' }}>
+                Open Weekly KPI
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── Profile card ─────────────────────────────────────────────── */}
         <div style={{
@@ -361,6 +434,8 @@ export default function ClinicianProfilePage() {
             </div>
           </div>
 
+          {/* An account does not administer itself — none of this in selfMode. */}
+          {!selfMode && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 0 }}>
             <button onClick={() => setShowEdit(true)} style={actionBtnStyle}>Edit profile</button>
             <button onClick={onResetPassword} style={actionBtnStyle}>Reset password</button>
@@ -369,10 +444,11 @@ export default function ClinicianProfilePage() {
               : <button onClick={onReactivate} style={actionBtnStyle}>Reactivate</button>
             }
           </div>
+          )}
         </div>
 
         {/* ── Edit modal ────────────────────────────────────────────────── */}
-        {showEdit && (
+        {showEdit && !selfMode && (
           <div
             style={{
               position: 'fixed', inset: 0, zIndex: 100,
@@ -440,7 +516,7 @@ export default function ClinicianProfilePage() {
               background: '#fff', padding: 4, borderRadius: 8,
               border: `1px solid ${BORDER}`, width: 'fit-content',
             }}>
-              {([['dropouts', 'Patient Dropouts'], ['case-acceptance', 'Case Acceptance']] as [ProfileTab, string][]).map(([id, label]) => (
+              {([['dropouts', 'Patient Dropouts'], ['case-acceptance', 'Case Acceptance'], ['weekly-kpi', 'Weekly KPI Reports']] as [ProfileTab, string][]).map(([id, label]) => (
                 <button key={id} onClick={() => setTab(id)} style={{
                   background:  tab === id ? TEAL : 'transparent',
                   color:       tab === id ? '#fff' : TEXT_SOFT,
@@ -517,7 +593,11 @@ export default function ClinicianProfilePage() {
                             <Th>Status</Th>
                             <Th>Reason</Th>
                             <Th>Notes</Th>
-                            <Th align="right">Actions</Th>
+                            {/* A physio cannot delete these — the server needs
+                                ADMIN or an approved delete request — so the
+                                column itself is gone rather than showing a
+                                button that can only fail. */}
+                            {!selfMode && <Th align="right">Actions</Th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -542,12 +622,14 @@ export default function ClinicianProfilePage() {
                               <Td>{d.status ? <StatusPill status={d.status} /> : <Dim>—</Dim>}</Td>
                               <Td>{d.reason || <Dim>—</Dim>}</Td>
                               <Td><span style={{ color: TEXT_SOFT }}>{d.notes || <Dim>—</Dim>}</span></Td>
-                              <Td align="right">
-                                <button
-                                  onClick={() => onDeleteDropout(d)}
-                                  style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}
-                                >Delete</button>
-                              </Td>
+                              {!selfMode && (
+                                <Td align="right">
+                                  <button
+                                    onClick={() => onDeleteDropout(d)}
+                                    style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}
+                                  >Delete</button>
+                                </Td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -656,7 +738,11 @@ export default function ClinicianProfilePage() {
                             <Th align="center">Prepay accepted</Th>
                             <Th>Treatment Plan notes</Th>
                             <Th>Notes</Th>
-                            <Th align="right">Actions</Th>
+                            {/* A physio cannot delete these — the server needs
+                                ADMIN or an approved delete request — so the
+                                column itself is gone rather than showing a
+                                button that can only fail. */}
+                            {!selfMode && <Th align="right">Actions</Th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -676,12 +762,14 @@ export default function ClinicianProfilePage() {
                               <Td align="center"><PrepayPill v={c.prepay_accepted} /></Td>
                               <Td><span style={{ color: TEXT_SOFT }}>{c.transition_notes || <Dim>—</Dim>}</span></Td>
                               <Td><span style={{ color: TEXT_SOFT }}>{c.notes || <Dim>—</Dim>}</span></Td>
-                              <Td align="right">
-                                <button
-                                  onClick={() => onDeleteCa(c)}
-                                  style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}
-                                >Delete</button>
-                              </Td>
+                              {!selfMode && (
+                                <Td align="right">
+                                  <button
+                                    onClick={() => onDeleteCa(c)}
+                                    style={{ ...smallBtnStyle, color: DANGER, borderColor: '#fecaca' }}
+                                  >Delete</button>
+                                </Td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -697,6 +785,39 @@ export default function ClinicianProfilePage() {
                 </div>
               </>
             )}
+
+            {/* ── Weekly KPI tab ───────────────────────────────────────────
+                Team Performance KPI Reporting is self-reported and saved
+                against the physio's own account, so this profile is where its
+                history belongs — Sam asked for it "sa kanya kanya profile nila
+                para may history". Same list component the physio sees under
+                their own form; only the endpoint differs. Read-only here: the
+                super admin views this data and never writes it (build spec
+                section 2), so there is no edit or delete affordance. */}
+            {tab === 'weekly-kpi' && (
+              <>
+                <div style={{
+                  background:'#fff', border:`1px solid ${BORDER}`, borderRadius:10,
+                  padding:'12px 16px', marginBottom:14, fontSize:12.5,
+                  color:TEXT_SOFT, lineHeight:1.55,
+                }}>
+                  {selfMode
+                    ? <>Every week you have reported, newest first. Click a week to read the full
+                        report and the conversation on it. To fill in this week, use{' '}
+                        <strong style={{ color:TEXT }}>Team Performance KPI Reporting</strong> on the home hub.</>
+                    : <>Every week this clinician has reported, newest first. Click a week
+                        to open the full report. To compare the whole team for one week,
+                        use <strong style={{ color:TEXT }}>Team Performance KPI</strong> on the home hub.</>}
+                </div>
+                {/* `mine` hits /me/history; the clinicianId endpoint is ADMIN-only. */}
+                {/* drawer: clicking a week opens it in the right-hand panel
+                    instead of pushing the list apart — Sam, 2026-08-24, "pati
+                    dito ganon din dapat ... pag click dun side din lalabas". */}
+                {selfMode
+                  ? <WeeklyKpiHistory mine drawer />
+                  : <WeeklyKpiHistory clinicianId={clinicianId} drawer />}
+              </>
+            )}
           </>
         )}
       </div>
@@ -706,7 +827,7 @@ export default function ClinicianProfilePage() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function BackBtn({ onClick }: { onClick: () => void }) {
+function BackBtn({ onClick, label = 'Back to User Management' }: { onClick: () => void; label?: string }) {
   return (
     <button onClick={onClick} style={{
       background: 'transparent', border: `1px solid ${BORDER}`,
@@ -714,7 +835,7 @@ function BackBtn({ onClick }: { onClick: () => void }) {
       fontSize: 13, fontWeight: 500, cursor: 'pointer',
       fontFamily: "'DM Sans', sans-serif",
       display: 'inline-flex', alignItems: 'center', gap: 6,
-    }}>← Back to User Management</button>
+    }}>← {label}</button>
   )
 }
 

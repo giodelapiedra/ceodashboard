@@ -3,6 +3,7 @@ import logoSrc from '../../assets/physioward-logo.png'
 import { useNavStore } from '../../store/nav.store'
 import { useAuthStore } from '../../store/auth.store'
 import { usePendingApprovalsStore } from '../../store/pendingApprovals.store'
+import { useWeeklyKpiUnreadStore } from '../../store/weeklyKpiUnread.store'
 import { CLINIC_LABEL, ClinicId, canAccessAdLeads } from '../../types'
 import AppShell from '../shared/AppShell'
 
@@ -15,6 +16,10 @@ export default function ClinicianHomePage() {
   const { navigate } = useNavStore()
   const { user } = useAuthStore()
   const { editCount, deleteCount } = usePendingApprovalsStore()
+  // Unread weekly-KPI comments (2026-08-24). Same badge idiom as the approval
+  // queues: for a physio it counts Sam's notes on their weeks, for Sam it
+  // counts replies on threads he is in.
+  const kpiUnread = useWeeklyKpiUnreadStore(s => s.total)
 
   // Super admin gets the same choice screen but with a third card that jumps
   // into the CEO dashboard + admin tools (still reachable from the top menu too).
@@ -28,6 +33,12 @@ export default function ClinicianHomePage() {
   // Ad Leads (Meta/Google Leads): the whole front desk since 2026-08-12, plus
   // the allow-listed ad-spend encoder. The super admin gets a separate card.
   const canEncodeAdLeads = !!user && canAccessAdLeads(user.role, user.email)
+
+  // Team Performance KPI Reporting: physios fill it in, the super admin reads
+  // the tracker. Two different cards pointing at two different pages — the
+  // admin has no form to open (spec section 2 puts Sam on the viewing side, and
+  // the server refuses a submit from an ADMIN token).
+  const isClinician = user?.role === 'CLINICIAN'
 
   const clinicLabel = user?.clinic_id ? CLINIC_LABEL[user.clinic_id as ClinicId] : ''
 
@@ -123,6 +134,33 @@ export default function ClinicianHomePage() {
               onClick={() => navigate('admin-delete-requests')}
             />
           )}
+          {/* The physio's weekly KPI form. First card on purpose: it is the one
+              thing with a deadline attached (Monday half, then Friday half),
+              where dropouts and case acceptance are logged as they happen. */}
+          {isClinician && (
+            <ChoiceCard
+              icon={<KpiIcon />}
+              title="Team Performance KPI Reporting"
+              description={kpiUnread > 0
+                ? `Sam has commented on your weekly KPI — open it to read and reply. Monday half, then close the loop Friday.`
+                : 'Your weekly KPIs, effectiveness and mojo ratings, and intention — Monday, then close the loop Friday.'}
+              color={TEAL}
+              badge={kpiUnread || undefined}
+              onClick={() => navigate('weekly-kpi')}
+            />
+          )}
+          {/* The physio's own profile — Sam asked for it on 2026-08-24 so a
+              physio can see their own history the way he sees it from
+              /admin/clinician-profile. Read-only. */}
+          {isClinician && (
+            <ChoiceCard
+              icon={<ProfileIcon />}
+              title="My Profile"
+              description="Your weekly KPI history, your patient dropouts, and your case acceptance — everything recorded under your name."
+              color={SLATE}
+              onClick={() => navigate('my-profile')}
+            />
+          )}
           {!isAdSpend && (
             <ChoiceCard
               icon={<DropoutsIcon />}
@@ -175,6 +213,20 @@ export default function ClinicianHomePage() {
               description="Weekly Practitioner Stats per clinic, Monday–Sunday, against the Clinical Impact KPI targets."
               color={TEAL}
               onClick={() => navigate('admin-practitioner-stats')}
+            />
+          )}
+          {/* Sam's side of the same feature: the shared tracker from the build
+              spec's section 8, one row per physio per week. */}
+          {isAdmin && (
+            <ChoiceCard
+              icon={<KpiIcon />}
+              title="Team Performance KPI"
+              description={kpiUnread > 0
+                ? `${kpiUnread} new repl${kpiUnread === 1 ? 'y' : 'ies'} on weeks you commented on, plus the team's effectiveness, mojo and check-in requests.`
+                : "The team's weekly KPI reports — effectiveness, mojo, intentions, and who has asked for a check-in."}
+              color={TEAL}
+              badge={kpiUnread || undefined}
+              onClick={() => navigate('admin-weekly-kpi')}
             />
           )}
           {isAdmin && (
@@ -231,6 +283,16 @@ export default function ClinicianHomePage() {
         )}
       </div>
     </AppShell>
+  )
+}
+
+function ProfileIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+    </svg>
   )
 }
 
@@ -358,6 +420,15 @@ function ClinicalImpactIcon() {
   return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  )
+}
+
+function KpiIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11l3 3L22 4" />
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
     </svg>
   )
 }

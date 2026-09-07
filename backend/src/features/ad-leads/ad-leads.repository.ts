@@ -256,15 +256,26 @@ export const adLeadRepository = {
     total:      number;
     booked:     number;
     byPlatform: Record<string, number>;
+    totalPaid:  number;
   }> {
     const { sql: whereSql, params } = buildWhere(scope, filters);
-    const [totalRes, bookedRes, platRes] = await Promise.all([
+    const [totalRes, bookedRes, platRes, paidRes] = await Promise.all([
       query<{ total: string }>(
         `SELECT COUNT(*)::bigint AS total FROM ad_leads l WHERE ${whereSql}`, params),
       query<{ booked: string }>(
         `SELECT COUNT(*)::bigint AS booked FROM ad_leads l WHERE ${whereSql} AND l.booked = true`, params),
       query<{ platform: string; n: string }>(
         `SELECT l.platform, COUNT(*)::bigint AS n FROM ad_leads l WHERE ${whereSql} GROUP BY l.platform`, params),
+      // Same shape as ad-spend.repository's "paid" total: only leads with a
+      // clean single Nookal match count. 'multiple' (several same-name
+      // clients — the Paid column shows "N matches", not a dollar figure) and
+      // unsynced/unmatched rows contribute nothing rather than being guessed
+      // at, so this total can only ever be a floor, never an overcount.
+      query<{ paid: string }>(
+        `SELECT COALESCE(SUM(l.nookal_paid), 0)::numeric AS paid
+           FROM ad_leads l
+          WHERE ${whereSql} AND l.nookal_status = 'matched' AND l.nookal_paid IS NOT NULL`,
+        params),
     ]);
 
     const byPlatform = platRes.rows.reduce<Record<string, number>>((acc, r) => {
@@ -276,6 +287,7 @@ export const adLeadRepository = {
       total:      Number(totalRes.rows[0]?.total ?? 0),
       booked:     Number(bookedRes.rows[0]?.booked ?? 0),
       byPlatform,
+      totalPaid:  Number(paidRes.rows[0]?.paid ?? 0),
     };
   },
 

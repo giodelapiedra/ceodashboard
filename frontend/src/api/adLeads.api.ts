@@ -60,6 +60,10 @@ export interface AdLeadSummary {
   total:      number;
   booked:     number;
   byPlatform: Record<string, number>;
+  /** SUM of the Paid (Nookal) column over the filtered set — only leads with
+   *  a clean single Nookal match count (a "N matches" row has no single
+   *  dollar figure to add), so this is a floor, never an overcount. */
+  totalPaid:  number;
 }
 
 // ── Nookal "total paid" lookup (booked leads) ──

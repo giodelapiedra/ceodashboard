@@ -100,6 +100,7 @@ export const FRONT_STAFF_NAMES = [
   'Holly',
   'Jenny',
   'Lisa Miller',
+  'Rose Turner',
   'Tanya',
   'Tilly',
   'Vanessa',
@@ -175,3 +176,47 @@ export const DROPOUT_REASONS = [
   'Self Discharge',
 ] as const;
 export type DropoutReason = typeof DROPOUT_REASONS[number];
+
+// ── Team Performance KPI Reporting (weekly-kpi) ──────────────────────────────
+// Spec section 2, "Who does what", is unusually explicit and worth quoting
+// because it is the whole access model:
+//   "Physios are the only ones who interact with the card. They fill it in
+//    Monday and again Friday — no one else submits anything."
+//   "Sam (and anyone else) only ever views the shared tracker tab — he never
+//    fills in a card himself. He's a viewer of the data, not a participant."
+//
+// So this is a two-sided gate and NOT the usual "admin can do everything"
+// pattern: ADMIN reads every row and writes none. Front desk and the ad-spend
+// encoder are outside the feature entirely.
+//
+// NOTE on `also_clinician`: sam@ is flagged as also treating patients, which is
+// why he appears in clinician pickers (migration 021). That flag deliberately
+// does NOT let him submit here — the spec puts him on the viewing side by name.
+// Mirrored in frontend types.ts.
+
+/** Who fills in the weekly KPI form. Physios only, per spec section 2. */
+export function canSubmitWeeklyKpi(role: Role): boolean {
+  return role === 'CLINICIAN';
+}
+
+/** Who sees the whole team's tracker (every clinician, every week). */
+export function canViewWeeklyKpiTracker(role: Role): boolean {
+  return role === 'ADMIN';
+}
+
+/**
+ * Who may delete a whole weekly KPI report. Super admin only — Sam's call,
+ * 2026-08-24 ("puwede rin mag delete si super admin Team performance KPI").
+ *
+ * This reverses the original "no delete — it is history" decision (2026-08-22)
+ * for ONE role. A physio still cannot delete their own week: they can re-submit
+ * the current one to correct it, and past weeks stay frozen. Deleting is for
+ * test rows and reports filed in error, which is a judgement only the person
+ * reading the whole tracker can make.
+ *
+ * There is deliberately no delete-request queue here (unlike dropouts and case
+ * acceptance): the only account that can ask is the only account that approves.
+ */
+export function canDeleteWeeklyKpiReport(role: Role): boolean {
+  return role === 'ADMIN';
+}

@@ -117,6 +117,7 @@ export const FRONT_STAFF_NAMES = [
   'Holly',
   'Jenny',
   'Lisa Miller',
+  'Rose Turner',
   'Tanya',
   'Tilly',
   'Vanessa',
@@ -284,4 +285,265 @@ export interface CaseAcceptanceDTO {
   notes:                    string | null;
   created_at:               string;
   updated_at:               string;
+}
+
+// ── Team Performance KPI Reporting (weekly-kpi) ─────────────────────────────
+// Built from "Weekly KPI & Wins Process — Build spec" (Sam, 2026-08-22). The
+// spec targets Teams Adaptive Cards; Sam's instruction was to build it here in
+// the dashboard first and leave Teams alone, so the fields and the
+// one-row-per-person-per-week rule are followed and the Teams plumbing is not.
+//
+// Access mirrors backend/src/shared/roles.ts, which is the source of truth —
+// the server re-checks both on every call. Spec section 2 is the whole model:
+// physios are the only ones who submit; Sam only ever views the tracker.
+
+/** Who fills in the form. Physios only. */
+export function canSubmitWeeklyKpi(role: Role): boolean {
+  return role === 'CLINICIAN'
+}
+
+/** Who sees the whole team's tracker. */
+export function canViewWeeklyKpiTracker(role: Role): boolean {
+  return role === 'ADMIN'
+}
+
+/**
+ * Who may delete a whole weekly KPI report — super admin only (Sam,
+ * 2026-08-24). A physio cannot delete their own week: the current week is
+ * corrected by re-submitting it, and past weeks stay frozen. Mirrors
+ * backend/src/shared/roles.ts, which re-checks on every call.
+ */
+export function canDeleteWeeklyKpiReport(role: Role): boolean {
+  return role === 'ADMIN'
+}
+
+/** One of the three KPI rows on the Monday half. */
+export interface KpiLine {
+  name:   string | null
+  target: string | null
+  result: string | null
+  /** focus_kpis[].hit from the Weekly Check-In reference. Three-valued: null is
+   *  "not answered", which is not the same answer as "did not hit". */
+  hit:    boolean | null
+}
+
+// ── Weekly Check-In: the 30 behaviour signals (migration 034) ───────────────
+//
+// The registry itself is NOT in this file. It is served by
+// GET /api/weekly-kpi/model from the backend's weekly-kpi.model.ts, which is
+// its only copy — thirty rows of question text, weights and Standard flags
+// mirrored here would be thirty chances for the form to ask something the
+// scorer does not know about, and a physio would never see the difference:
+// their score would just be computed from a different set of questions than the
+// one they answered. Only the SHAPES live here.
+
+/** 0-3, or null for "N/A — did not arise this week." */
+export type SignalRating = 0 | 1 | 2 | 3 | null
+
+export interface KpiSignal {
+  signal_id: string
+  group_id:  string
+  /** Weight within the group, 1-3. */
+  weight:    number
+  /** A Standard: expected every week, not a stretch goal. Seven of the thirty. */
+  standard:  boolean
+  text:      string
+}
+
+export interface KpiSignalGroup {
+  group_id:     string
+  name:         string
+  group_weight: number
+  drives:       string
+}
+
+export type KpiBandId = 'ceiling' | 'model' | 'strong' | 'gap' | 'intervene'
+
+export interface KpiScoreBand {
+  band_id: KpiBandId
+  /** Inclusive lower bound on the ROUNDED score. */
+  min:     number
+  label:   string
+}
+
+export interface KpiDrainType {
+  type:         string
+  label:        string
+  signs:        string
+  first_action: string
+}
+
+/** Everything the form needs to render and preview a score, in one payload with
+ *  one version stamp — so a client can never render one model's questions and
+ *  be scored against another's. */
+export interface KpiModel {
+  model_version:         string
+  point_map:             Record<string, number>
+  max_points:            number
+  groups:                KpiSignalGroup[]
+  signals:               KpiSignal[]
+  bands:                 KpiScoreBand[]
+  drain_types:           KpiDrainType[]
+  mojo_flag_at_or_below: number
+  na_count_review_at:    number
+}
+
+/** The nine self-reported weekly counts. They do not affect the score. */
+export interface WeeklyCounts {
+  initials_seen:         number | null
+  recommendations_full:  number | null
+  plans_accepted_full:   number | null
+  plans_accepted_part:   number | null
+  dropouts_contacted:    number | null
+  consults_recorded:     number | null
+  calls_due:             number | null
+  calls_made:            number | null
+  cancellations_noshows: number | null
+}
+
+/** The score snapshot the server computed and stored. Every field is null on a
+ *  week submitted before the signal model existed — that is how the UI knows to
+ *  fall back to the older hand-picked `effectiveness_rating` rather than
+ *  printing a gap. */
+export interface EffectivenessSnapshot {
+  effectiveness_score: number | null
+  group_pcts:          Record<string, number | null>
+  standards_missed:    number | null
+  standards_na:        number | null
+  na_count:            number | null
+  band_id:             KpiBandId | null
+  model_version:       string | null
+  is_incomplete:       boolean
+}
+
+export interface WeeklyKpiDTO {
+  id:             string
+  clinician_id:   string
+  clinician_name: string | null
+  clinic_id:      ClinicId
+  week_start:     string        // YYYY-MM-DD (Monday)
+  week_end:       string        // YYYY-MM-DD (Sunday)
+
+  // Monday half
+  kpis:                 [KpiLine, KpiLine, KpiLine]
+  missed_goal_actions:  string | null
+  /** Whole-number 0–10 display score. Hand-picked by the physio before the
+   *  signal model; from migration 034 on it is ROUND(effectiveness_score), so
+   *  the tracker, the team averages and the Excel export keep reading one
+   *  column across both eras. Read `effectiveness.effectiveness_score` when you
+   *  want the precise number and it is not null.
+   *
+   *  NULL until the Friday half is submitted (2026-09-04: Effectiveness moved
+   *  to Friday) — except on a row submitted before that change. */
+  effectiveness_rating: number | null
+  /** 1–10. Same NULL-until-Friday rule as effectiveness_rating — see above. */
+  mojo_rating:          number | null
+  /** Mojo question 2 — any of 'physical' | 'emotional' | 'mental' |
+   *  'relational' | 'none'. Multi-select since 2026-09-04; 'none' ("No drain")
+   *  is exclusive. Null on weeks submitted before the drain question existed. */
+  mojo_drain:           string[] | null
+  /** Mojo question 3 — the one action, and when. */
+  mojo_action:          string | null
+  intention:            string
+  case_to_discuss:      string | null
+  help_needed:          string | null
+  checkin_needed:       boolean
+  checkin_focus:        string | null
+  monday_submitted_at:  string
+
+  /** The computed score and its breakdown. Nulls throughout for a pre-034 week. */
+  effectiveness: EffectivenessSnapshot
+  counts:        WeeklyCounts
+  /** The thirty raw ratings. Only present on a SINGLE-report read (the form's
+   *  own week, or a report fetched by id) — a tracker listing would need one
+   *  query per row for something no list shows. Undefined is "not asked for". */
+  signals?:      Record<string, SignalRating>
+
+  // Friday half — null until the loop is closed. friday_submitted_at is the
+  // canonical "still open" test; every Friday text field is optional, so an
+  // honest submission can leave all three blank.
+  wins:                string | null
+  goal_achieved:       boolean | null
+  goal_reflection:     string | null
+  flag_for_sam:        string | null
+  /** The Weekly Check-In `reflection` block. Its fourth field, `flag`, is the
+   *  flag_for_sam above — not duplicated under a second name. */
+  best_behaviour:      string | null
+  slipped:             string | null
+  commitment:          string | null
+  friday_submitted_at: string | null
+
+  created_at: string
+  updated_at: string
+
+  // ── Comment thread (migration 033) ────────────────────────────────────────
+  // Set by the server on every list/read, from the CALLER's point of view —
+  // `unread_count` is "waiting for you", so the same report carries different
+  // numbers for Sam and for the physio. Optional because an older cached
+  // response may not have them; treat undefined as 0, never as "unknown".
+  comment_count?: number
+  unread_count?:  number
+}
+
+/** One message in a weekly KPI thread. Two parties only: the physio the report
+ *  belongs to, and the super admin. */
+export interface WeeklyKpiComment {
+  id:          string
+  report_id:   string
+  author_id:   string
+  author_name: string | null
+  author_role: Role
+  body:        string
+  created_at:  string
+  updated_at:  string
+  /** updated_at is meaningfully later than created_at — the UI prints "edited". */
+  edited:      boolean
+}
+
+/**
+ * The Effectiveness and Mojo scoring rubrics, shown under each 1–10 scale.
+ * Spec section 5: "keep this visible so the scale stays consistent across the
+ * team" — so these render inline on the form, not behind a tooltip or a help
+ * link. Wording is verbatim from the spec's HTML preview; do not paraphrase,
+ * because the team is being scored against these exact sentences.
+ */
+export interface RubricBand {
+  score:   string
+  meaning: string
+  /** Inclusive numeric bounds, so a stored score can be mapped back to its
+   *  band without parsing the "9–10" display string. */
+  min:     number
+  max:     number
+  /** Two or three words summarising the band, for places too narrow to carry
+   *  the full sentence (the tracker's rating meters). Condensed from `meaning`
+   *  — never shown INSTEAD of the rubric on the form itself, where the spec
+   *  requires the full wording. */
+  short:   string
+}
+
+export const EFFECTIVENESS_RUBRIC: readonly RubricBand[] = [
+  { min: 9, max: 10, score: '9–10', short: 'All targets hit', meaning: 'Hit all KPI targets. Full, clinically justified recommendations every time. Notes and Nookal done same-day. Ran the consult framework consistently, including when no one was watching.' },
+  { min: 7, max: 8,  score: '7–8',  short: 'Mostly on track',  meaning: 'Mostly on track — one or two lapses (a late note, a target slightly missed) but no pattern of shortcuts.' },
+  { min: 5, max: 6,  score: '5–6',  short: 'Mixed week',       meaning: 'Mixed week — did the job, but visible gaps: documentation backlog, inconsistent use of the framework, or a missed target with no fix plan yet.' },
+  { min: 3, max: 4,  score: '3–4',  short: 'Frequent gaps',    meaning: 'Frequent gaps — steps skipped under pressure, notes piling up, targets missed without a corrective action.' },
+  { min: 1, max: 2,  score: '1–2',  short: 'Care at risk',     meaning: 'Patient care or documentation put at risk. No real adherence to process this week.' },
+]
+
+export const MOJO_RUBRIC: readonly RubricBand[] = [
+  { min: 9, max: 10, score: '9–10', short: 'Energised',      meaning: 'Energised and present in every session. Confident, proactive, helping others without being asked.' },
+  { min: 7, max: 8,  score: '7–8',  short: 'Solid energy',   meaning: 'Solid energy most of the week, maybe one dip — still showed up fully for patients.' },
+  { min: 5, max: 6,  score: '5–6',  short: 'Up and down',    meaning: 'Up and down. Some fatigue, had to push through at points, but still functional.' },
+  { min: 3, max: 4,  score: '3–4',  short: 'Running empty',  meaning: 'Running on empty most of the week — flat, withdrawn, or irritable, and masking it to get through.' },
+  { min: 1, max: 2,  score: '1–2',  short: 'Depleted',       meaning: 'Depleted. Struggling to show up. This is a "talk to me now," not "note it and move on."' },
+]
+
+/** Mojo of 1–2 is the spec's "talk to me now" band, so the tracker flags it
+ *  rather than leaving Sam to spot a small number in a column of numbers. */
+export const MOJO_ALERT_AT_OR_BELOW = 2
+
+/** The band a stored score falls in. Never returns null for a valid 1–10 score
+ *  (the bands cover the range with no gaps), but a corrupt value shouldn't
+ *  crash a tracker row, so the caller still handles null. */
+export function rubricBandFor(score: number, bands: readonly RubricBand[]): RubricBand | null {
+  return bands.find(b => score >= b.min && score <= b.max) ?? null
 }

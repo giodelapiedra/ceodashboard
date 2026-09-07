@@ -21,6 +21,7 @@ import adLeadsRoutes         from './features/ad-leads/ad-leads.routes';
 import auditLogRoutes        from './features/audit-log/audit-log.routes';
 import patientsRoutes         from './features/patients/patients.routes';
 import practitionerStatsRoutes from './features/practitioner-stats/practitioner-stats.routes';
+import weeklyKpiRoutes        from './features/weekly-kpi/weekly-kpi.routes';
 import { errorMiddleware } from './middleware/error.middleware';
 
 const app = express();
@@ -47,6 +48,7 @@ app.use('/api/ad-leads',        adLeadsRoutes);
 app.use('/api/audit-log',       auditLogRoutes);
 app.use('/api/patients',        patientsRoutes);
 app.use('/api/practitioner-stats', practitionerStatsRoutes);
+app.use('/api/weekly-kpi',      weeklyKpiRoutes);
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

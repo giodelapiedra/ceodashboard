@@ -60,18 +60,25 @@ export interface CancellationDayRow {
    */
   churns: number;
   /**
-   * The Cancellation % numerator: patients who dropped out, counted per ENTRY
-   * and bucketed exactly like churns.
+   * The Cancellation % numerator: Patient Dropout Tracking entries, counted per
+   * ENTRY and bucketed exactly like churns.
    *
-   * A SUBSET of churns. Sam settled this 2026-08-20: 'No Future Bookings' and
-   * 'Cancelled - not rescheduled' count, 'Completed Treatment Plan' does NOT —
-   * a patient who finished their treatment plan is a success, and counting that
-   * as a cancellation would penalise the practitioner for doing the job right.
-   * 'Re-scheduled' is out for the churn reason: the booking still exists.
+   * Sam restated the rule 2026-09-07: EVERY entry the front desk logged for
+   * that clinician counts EXCEPT 'Completed Treatment Plan' — a patient who
+   * finished their plan is a success, and counting that as a cancellation would
+   * penalise the practitioner for doing the job right. So 'Re-scheduled' is now
+   * IN; it was out until 2026-09-07 on the churn reasoning (the booking still
+   * exists), which Sam has since overruled: "Total entries pero hindi kasama
+   * Completed Treatment Plan status".
    *
-   * Whole practice, June 2026 Week 1, on 410 Total Appts: 70 no-future-booking
-   * + 22 cancelled-not-rescheduled = 92, so 22.4%. Including the 8 completed
-   * treatment plans would have read 24.4%.
+   * NOT a subset of churns any more — 'Re-scheduled' is a cancellation but not
+   * a churn, so the two lists now cross rather than nest.
+   *
+   * Whole practice, June 2026 Week 1, on 410 Total Appts, under the OLD
+   * narrower rule: 70 no-future-booking + 22 cancelled-not-rescheduled = 92,
+   * so 22.4% (folding in the 8 completed treatment plans would have read
+   * 24.4%). The new rule adds the re-scheduled entries on top of the 92, so
+   * every historical Cancellation % on the board reads HIGHER than it did.
    */
   cancellation_dropouts: number;
 }
@@ -87,23 +94,27 @@ function isoDay(d: Date | string): string {
 }
 
 /**
- * Statuses that end in a genuine drop-off — the Cancellation % numerator.
- * See CancellationDayRow.cancellation_dropouts for why these two and not more.
+ * The Cancellation % numerator: every dropout status EXCEPT 'Completed
+ * Treatment Plan' (Sam, 2026-09-07). Mirrored in weekly-kpi.repository's
+ * CANCELLATION_DROPOUT_STATUSES — the same KPI must not read two ways.
+ * See CancellationDayRow.cancellation_dropouts.
  */
 const CANCELLATION_STATUSES = [
   'Cancelled - not rescheduled',
   'No Future Bookings',
+  'Re-scheduled',
 ];
 
 /**
  * Statuses that leave the patient with no future booking. 'Re-scheduled' is
- * deliberately absent — see CancellationDayRow.churns.
- *
- * A superset of CANCELLATION_STATUSES: a completed treatment plan leaves no
- * future booking, so it is a churn, but it is not a cancellation.
+ * deliberately absent — see CancellationDayRow.churns — which is why this is
+ * spelled out in full rather than built from CANCELLATION_STATUSES: since
+ * 2026-09-07 that list includes 'Re-scheduled', and spreading it here would
+ * silently turn every re-scheduled appointment into a churn.
  */
 const CHURN_STATUSES = [
-  ...CANCELLATION_STATUSES,
+  'Cancelled - not rescheduled',
+  'No Future Bookings',
   'Completed Treatment Plan',
 ];
 
@@ -114,35 +125,11 @@ export interface WeekInputRow {
   month:         number;
   week_num:      number;   // 1-4, 5 = Remainder
   total_appts:   number | null;
-  occupancy_pct: number | null;
   new_cases:     number | null;
   /** Nookal 'Cancelled' appointments — see migration 026 for why it is a count. */
   cancelled_count: number | null;
   /** Null = never synced from Nookal (hand-entered only). */
   synced_at:     string | null;
-
-  /**
-   * Where occupancy_pct came from. 'nookal' = computed by the sync, 'manual' =
-   * a person typed it. NULL with a value present means it predates migration
-   * 029, and every one of those was hand-entered — so the service reads a NULL
-   * source with a value as manual.
-   */
-  occupancy_source: 'nookal' | 'manual' | 'nookal_report' | 'nookal_api' | null;
-  /**
-   * The minutes behind occupancy_pct, when Nookal computed it. Present so the
-   * Team row can pool — SUM(booked) / SUM(booked + available) — rather than
-   * averaging percentages, which is what migration 024 was stuck with.
-   */
-  occupancy_booked_minutes:    number | null;
-  occupancy_available_minutes: number | null;
-  occupancy_blocked_minutes:   number | null;
-  /**
-   * Nookal "Scheduled Minutes" — rostered shift time, and the denominator its
-   * own Occupancy report divides by. Only ever set by the report import
-   * (migration 030): the roster is absent from the v3 API, so the derived path
-   * cannot fill this in. NULL means occupancy was derived, not imported.
-   */
-  occupancy_scheduled_minutes: number | null;
 }
 
 export interface UpsertWeekInput {
@@ -151,7 +138,6 @@ export interface UpsertWeekInput {
   month:         number;
   week_num:      number;
   total_appts:   number | null;
-  occupancy_pct: number | null;
   new_cases:     number | null;
   entered_by:    string;
 }
@@ -312,7 +298,7 @@ export const practitionerStatsRepository = {
   },
 
   /**
-   * The hand-entered Total Appts / Occupancy / NC for one month, all weeks.
+   * The hand-entered Total Appts / NC for one month, all weeks.
    *
    * Not filtered by clinic: SOP steps 8 and 16 both read these off Nookal with
    * "Location — All Location", so they are practice-wide per practitioner and
@@ -325,21 +311,12 @@ export const practitionerStatsRepository = {
       month:         number;
       week_num:      number;
       total_appts:   number | null;
-      occupancy_pct: string | null;   // NUMERIC comes back as text
       new_cases:     number | null;
       cancelled_count: number | null;
       synced_at:     Date | null;
-      occupancy_source:            'nookal' | 'manual' | 'nookal_report' | 'nookal_api' | null;
-      occupancy_booked_minutes:    number | null;
-      occupancy_available_minutes: number | null;
-      occupancy_blocked_minutes:   number | null;
-      occupancy_scheduled_minutes: number | null;
     }>(
-      `SELECT clinician_id, year, month, week_num, total_appts, occupancy_pct,
-              new_cases, cancelled_count, synced_at,
-              occupancy_source, occupancy_booked_minutes,
-              occupancy_available_minutes, occupancy_blocked_minutes,
-              occupancy_scheduled_minutes
+      `SELECT clinician_id, year, month, week_num, total_appts,
+              new_cases, cancelled_count, synced_at
          FROM practitioner_week_inputs
         WHERE year = $1 AND month = $2`,
       [year, month]
@@ -350,15 +327,9 @@ export const practitionerStatsRepository = {
       month:         Number(r.month),
       week_num:      Number(r.week_num),
       total_appts:   r.total_appts === null ? null : Number(r.total_appts),
-      occupancy_pct: r.occupancy_pct === null ? null : Number(r.occupancy_pct),
       new_cases:     r.new_cases === null ? null : Number(r.new_cases),
       cancelled_count: r.cancelled_count === null ? null : Number(r.cancelled_count),
       synced_at:     r.synced_at ? r.synced_at.toISOString() : null,
-      occupancy_source:            r.occupancy_source,
-      occupancy_booked_minutes:    r.occupancy_booked_minutes    === null ? null : Number(r.occupancy_booked_minutes),
-      occupancy_available_minutes: r.occupancy_available_minutes === null ? null : Number(r.occupancy_available_minutes),
-      occupancy_blocked_minutes:   r.occupancy_blocked_minutes   === null ? null : Number(r.occupancy_blocked_minutes),
-      occupancy_scheduled_minutes: r.occupancy_scheduled_minutes === null ? null : Number(r.occupancy_scheduled_minutes),
     }));
   },
 
@@ -366,62 +337,23 @@ export const practitionerStatsRepository = {
    * Upsert one practitioner-week. Keyed on the unique index so re-entering a
    * week corrects it in place — a second row would be silently double-counted.
    *
-   * All three values are overwritten, including with NULL, so clearing a
-   * mistyped figure is possible. A row where all three are null is kept rather
-   * than deleted: it records that someone looked and left it blank.
-   *
-   * Occupancy carries ownership with it (migration 029). The form posts all
-   * three figures on every save, including an occupancy the sync filled in and
-   * nobody touched — so marking every save 'manual' would quietly freeze that
-   * week against all future syncs. Only a value that DIFFERS from what is stored
-   * is treated as a person's own; an unchanged one keeps whatever source and
-   * minutes it already had. Clearing it hands the week back to the sync.
+   * Both values are overwritten, including with NULL, so clearing a mistyped
+   * figure is possible. A row where both are null is kept rather than deleted:
+   * it records that someone looked and left it blank.
    */
   async upsertWeekInput(input: UpsertWeekInput): Promise<void> {
     await query(
       `INSERT INTO practitioner_week_inputs
-         (clinician_id, year, month, week_num, total_appts, occupancy_pct, new_cases,
-          entered_by, occupancy_source)
-       VALUES ($1,$2,$3,$4,$5,$6::numeric,$7,$8,
-               CASE WHEN $6::numeric IS NULL THEN NULL ELSE 'manual' END)
+         (clinician_id, year, month, week_num, total_appts, new_cases, entered_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (clinician_id, year, month, week_num) DO UPDATE
-          SET total_appts   = EXCLUDED.total_appts,
-              occupancy_pct = EXCLUDED.occupancy_pct,
-              new_cases     = EXCLUDED.new_cases,
-
-              occupancy_source = CASE
-                WHEN EXCLUDED.occupancy_pct IS NULL THEN NULL
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_source
-                ELSE 'manual' END,
-
-              -- The stored minutes explain the stored percentage. Once a person
-              -- overrides the percentage they no longer explain anything, so
-              -- they go rather than sit there contradicting it.
-              occupancy_booked_minutes = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_booked_minutes ELSE NULL END,
-              occupancy_available_minutes = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_available_minutes ELSE NULL END,
-              occupancy_blocked_minutes = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_blocked_minutes ELSE NULL END,
-              occupancy_scheduled_minutes = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_scheduled_minutes ELSE NULL END,
-              occupancy_synced_at = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_synced_at ELSE NULL END,
-              occupancy_measured_days_after = CASE
-                WHEN EXCLUDED.occupancy_pct IS NOT DISTINCT FROM practitioner_week_inputs.occupancy_pct
-                  THEN practitioner_week_inputs.occupancy_measured_days_after ELSE NULL END,
-
-              updated_at    = NOW(),
-              updated_by    = EXCLUDED.entered_by`,
+          SET total_appts = EXCLUDED.total_appts,
+              new_cases   = EXCLUDED.new_cases,
+              updated_at  = NOW(),
+              updated_by  = EXCLUDED.entered_by`,
       [
         input.clinician_id, input.year, input.month, input.week_num,
-        input.total_appts, input.occupancy_pct, input.new_cases, input.entered_by,
+        input.total_appts, input.new_cases, input.entered_by,
       ]
     );
   },

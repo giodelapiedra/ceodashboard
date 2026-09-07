@@ -1,4 +1,4 @@
-import ExcelJS from 'exceljs'
+import { newWorkbook, applyAllBorders, downloadWorkbook } from './xlsx'
 import {
   DropoutDTO, DropoutStatus, ClinicId, CLINIC_LABEL,
   DROPOUT_STATUSES, DROPOUT_REASONS, FRONT_STAFF_NAMES,
@@ -58,10 +58,7 @@ export async function exportDropoutsXlsx(
   ]
   const colCount = cols.length
 
-  const wb = new ExcelJS.Workbook()
-  wb.creator        = 'PhysioWard'
-  wb.created        = new Date()
-  wb.lastModifiedBy = 'PhysioWard'
+  const wb = newWorkbook()
 
   const ws = wb.addWorksheet('Daily Patient Dropout Tracking', {
     views: [{ state: 'frozen', ySplit: 2 }],
@@ -78,7 +75,7 @@ export async function exportDropoutsXlsx(
   }
   titleCell.alignment = { vertical: 'middle', horizontal: 'center' }
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.titleBg } }
-  applyAllBorders(titleCell)
+  applyAllBorders(titleCell, COLOR.border)
 
   // ── Row 2: header row ───────────────────────────────────────
   const headerRow = ws.addRow(cols.map((c) => c.header))
@@ -87,7 +84,7 @@ export async function exportDropoutsXlsx(
     c.font      = { name: 'Calibri', bold: true, color: { argb: COLOR.headerFg }, size: 11 }
     c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
     c.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.headerBg } }
-    applyAllBorders(c)
+    applyAllBorders(c, COLOR.border)
   })
 
   // Column index helpers (1-based for ExcelJS).
@@ -120,7 +117,7 @@ export async function exportDropoutsXlsx(
         horizontal: spec.align,
         wrapText:   spec.header === 'Notes' || spec.header === 'Appointments Cancelled',
       }
-      applyAllBorders(cell)
+      applyAllBorders(cell, COLOR.border)
 
       if (spec.dropdown && colNumber !== STATUS_COL) {
         cell.fill = {
@@ -171,22 +168,5 @@ export async function exportDropoutsXlsx(
     to:   { row: 2, column: colCount },
   }
 
-  // ── Trigger download ────────────────────────────────────────
-  const buffer = await wb.xlsx.writeBuffer()
-  const blob   = new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  })
-  const url = URL.createObjectURL(blob)
-  const a   = document.createElement('a')
-  a.href     = url
-  a.download = `${opts.filename}.xlsx`
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
-}
-
-function applyAllBorders(cell: ExcelJS.Cell): void {
-  const side = { style: 'thin' as const, color: { argb: COLOR.border } }
-  cell.border = { top: side, bottom: side, left: side, right: side }
+  await downloadWorkbook(wb, opts.filename)
 }

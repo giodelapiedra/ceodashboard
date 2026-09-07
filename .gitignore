@@ -53,3 +53,6 @@ backend/nookal-login-*.png
 docs/GSHEETS_SYNC_REPORT.md
 docs/GSHEETS_ROWS_TO_FIX.md
 ROWS_TO_FIX.md
+
+# Local dev screenshots from `npm run shot:kpi-mobile` — build output, never committed.
+backend/.shots/

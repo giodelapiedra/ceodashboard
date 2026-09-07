@@ -536,10 +536,18 @@ export default function AdSpendEntryPage() {
   const syncFrom = '2021-01-01'
   const syncTo   = todayISO()
 
-  // Meta's Insights API rejects a start date more than 37 months back, so
-  // Facebook gets its own floor of 36 months ago instead of 2021.
+  // Facebook's default sync window is a rolling 30 days, NOT the full
+  // history (Sam, 2026-09-04): pulling the full 36-month floor on every click
+  // re-fetches day-level rows for ~1,095 days plus a one-row-at-a-time INSERT
+  // loop server-side, which was timing out with a 504 in practice ("hindi
+  // naman dapat kunin pa lagi 3 years, ung latest lang para hindi mabigat").
+  // The full-history backfill already happened once (2026-08-14, see
+  // memory) and closed campaign-months do not change, so a 30-day rolling
+  // window is enough to catch anything recent without redoing that work
+  // every time. If a real historical gap ever needs backfilling again,
+  // that is a one-off, not something the everyday button should carry.
   const fbFloor = new Date()
-  fbFloor.setMonth(fbFloor.getMonth() - 36)
+  fbFloor.setDate(fbFloor.getDate() - 30)
   const syncFromFb = fbFloor.toISOString().slice(0, 10)
 
   const onSyncGoogle = async () => {

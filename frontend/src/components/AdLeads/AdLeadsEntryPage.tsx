@@ -383,26 +383,13 @@ export default function AdLeadsEntryPage() {
         })
       } catch { /* best-effort — the POST re-checks under a lock */ }
 
+      // Only an exact-key match (same clinic + name + platform + date) warrants
+      // a popup. A near-date match on its own is common enough (re-run of the
+      // same export, a second legitimate lead) not to interrupt entry.
       if (report?.exact) {
         const decision = await resolveDuplicate(report, incoming)
         if (decision === null) return
         onDuplicate = decision
-      } else if (report && report.similar.length > 0) {
-        // Tier 2: same person within two weeks on another platform or date.
-        // Usually a re-run of the same Meta/Google export — worth a look, but
-        // a genuine second lead is common enough not to block it.
-        const near  = report.similar[0]
-        const extra = report.similar.length - 1
-        const ok = await confirmDialog.ask({
-          title:   'Same person logged nearby',
-          message:
-            `"${near.patient_name}" is already logged as a ${near.platform} lead on ${near.date_added}` +
-            `${extra > 0 ? ` (and ${extra} more within two weeks)` : ''}.` +
-            `\n\nDouble-check the platform and date. Add this lead?`,
-          confirmLabel: 'Yes, add lead',
-          cancelLabel:  'Let me check',
-        })
-        if (!ok) return
       }
     }
 
@@ -781,16 +768,21 @@ function SummaryCards({ summary }: { summary: AdLeadSummary | null }) {
   const loaded = summary !== null
   const rate = loaded && summary!.total > 0 ? Math.round((summary!.booked / summary!.total) * 100) : null
   return (
-    <div className="pw-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 16 }}>
+    <div className="pw-grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
       <Card label="Total Leads" value={loaded ? summary!.total.toLocaleString() : '—'} highlight />
       <Card label="Booked" value={loaded ? summary!.booked.toLocaleString() : '—'} />
       <Card label="Conversion" value={rate !== null ? `${rate}%` : '—'} />
+      <Card
+        label="Paid (Nookal)"
+        value={loaded ? `$${summary!.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+        title="Sum of the Paid (Nookal) column for the current filter. Rows showing 'N matches' or not yet synced are not counted — there is no single dollar figure to add for those, so this total is a floor."
+      />
     </div>
   )
 }
-function Card({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function Card({ label, value, highlight, title }: { label: string; value: string; highlight?: boolean; title?: string }) {
   return (
-    <div style={{ background: highlight ? '#f0faf7' : '#fff', border: `1px solid ${highlight ? '#cdebde' : BORDER}`, borderRadius: 10, padding: '14px 18px' }}>
+    <div title={title} style={{ background: highlight ? '#f0faf7' : '#fff', border: `1px solid ${highlight ? '#cdebde' : BORDER}`, borderRadius: 10, padding: '14px 18px' }}>
       <div style={{ fontSize: 11, color: TEXT_SOFT, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: highlight ? TEAL : TEXT, marginTop: 4 }}>{value}</div>
     </div>

@@ -514,27 +514,13 @@ export default function DropoutEntryPage() {
         })
       } catch { /* best-effort — the POST re-checks under a lock */ }
 
+      // Only an exact-key match (same patient + clinic + clinician + date)
+      // warrants a popup. A near-date match on its own is common enough
+      // (mistyped date aside) not to interrupt entry.
       if (report?.exact) {
         const decision = await resolveDuplicate(report, incoming)
         if (decision === null) return
         onDuplicate = decision
-      } else if (report && report.similar.length > 0) {
-        // Tier 2: same patient at this clinic within two weeks, but a
-        // different clinician or date. Legitimate often enough that it only
-        // warrants a heads-up — the usual cause is a mistyped date.
-        const near  = report.similar[0]
-        const extra = report.similar.length - 1
-        const ok = await confirmDialog.ask({
-          title:   'Same patient logged nearby',
-          message:
-            `"${near.patient_name}" already has a dropout entry on ${near.date_logged}` +
-            `${near.clinician_name ? ` under ${near.clinician_name}` : ''}` +
-            `${extra > 0 ? ` (and ${extra} more within two weeks)` : ''}.` +
-            `\n\nDouble-check the date and clinician. Add this entry?`,
-          confirmLabel: 'Yes, add entry',
-          cancelLabel:  'Let me check',
-        })
-        if (!ok) return
       }
     }
 

@@ -169,6 +169,117 @@ Hand-typed ang Ageing Debts sa CEO dashboard, hindi hinihila sa Nookal. **Binago
 
 > **Babala tungkol sa kahulugan:** balance ang Ageing Debts (kung magkano ang nakabinbin sa isang punto), at ang pagsuma ng balance sa apat-limang linggo ay lumalabas na mas malaki kaysa totoo. Ipinaliwanag ito kay Sam noong 2026-08-12 at **sum pa rin ang pinili niya** — kaya ang numerong tina-type kada linggo ay basahin bilang "utang na para sa linggong iyon", hindi running total. Huwag itong basta ibalik sa last-week-wins.
 
+## 15. Team Performance KPI Reporting (migration 032)
+Ang lingguhang KPI + wins cycle mula sa **"Weekly KPI & Wins Process — Build spec"** (Sam, 2026-08-22). Ang spec ay para sa Teams Adaptive Cards + Power Automate + SharePoint list; **ang utos ni Sam ay sa dashboard muna gawin, iwan muna ang Teams** — kaya sinunod ang lahat ng field, wording at ang Monday/Friday cycle, pero **walang Teams/Power Automate na ginawa**.
+
+**Isang row kada physio kada linggo** (`weekly_kpi_reports`, unique sa `clinician_id + week_start`). Ito ang match key ng spec: ang Monday submit ang gumagawa ng row, ang Friday submit ang nagsasara nito — hindi bagong row.
+
+### Sino ang gumagawa ng ano (spec section 2)
+| Role | Pwede |
+|---|---|
+| **CLINICIAN** | Sagutan ang form (Monday + Friday) at tingnan **ang sarili nilang history lang** |
+| **ADMIN (Sam)** | Tingnan ang **tracker ng buong team** at ang history ng kahit sinong physio — **walang sinasagutan** |
+| FRONT_DESK / FRONT_DESK_GLOBAL / ADSPEND | Wala — wala sa feature |
+
+Tinatanggihan ng server ang submit mula sa ADMIN token (403). Sinadya ito: viewer si Sam sa spec, hindi participant.
+
+### Walang tina-type na Name at Clinic
+Required ang Name at Clinic sa spec dahil **hindi alam ng Teams card kung sino ang nagpupuno**. Alam ito ng app. Kaya:
+- **Name** — galing sa JWT (`clinician_id`). Hindi tinatanggap mula sa body — kung tinanggap, puwedeng mag-file ang isang physio sa pangalan ng kasama niya.
+- **Clinic** — galing sa default clinic ng account (`users.clinic_id`). Nakikita read-only sa header ng form.
+- **Naka-store pa rin ang `clinic_id`** (hindi lang joined): naglilipat-lipat ng clinic ang mga physio, at kailangang manatiling tama ang lumang linggo.
+- Kung **walang clinic** ang account, sinasabi ng form at ng server na ipaayos sa admin — hindi ito nagde-default sa kahit anong clinic.
+
+### Mga field
+- **Monday** — KPI #1–#3 (name / target / result), "If you did not hit the goal", **Effectiveness 1–10**, **Mojo (Energy) 1–10** (nasa ilalim ng bawat isa ang **buong rubric**, laging nakikita — hinihingi ng spec), Intentions for the week (required), case to discuss, what help is needed, **Do you need a 15-minute check-in?** + follow-up kapag Yes.
+- **Friday** — What went well, **Did you achieve your Monday goal and intention?** + reflection kapag No, anything else to flag to Sam.
+- Ang mga conditional na field ay ipinapakita **lang** kung tugma ang sagot, at tinatanggihan ng validator ang kontradiksyon (halimbawa: reflection kasama ang "goal achieved = Yes").
+
+### Pwede pang baguhin sa loob ng linggo — walang approval
+Ang re-submit ng **kasalukuyang linggo** ay **upsert**: tinatama ang parehong row, walang duplicate. **Frozen ang mga nakalipas na linggo.**
+- **Hindi** ito dumadaan sa edit-request / approval queue, kaiba sa dropouts at case acceptance. Iyon ay shared operational records — ang typo ng isa ay maling numero ng iba. Self-report ito: ang may-akda lang ang tinutumbok ng pagtatama, at "7 pala hindi 8 ang mojo ko" ay hindi kailangang dumaan sa CEO.
+- Hindi binubura ng pag-tama sa Monday half ang Friday half na naipasok na.
+- Walang delete — history ito.
+
+### Ang tracker ni Sam (spec section 8)
+`/admin/weekly-kpi`, isang linggo sa isang tingin, naka-group per clinic. **Scan columns lang** sa table (Name, Intention, Eff, Mojo, Goal hit, Check-in) — ang KPI detail, wins, reflection at case to discuss ay **nasa loob ng row** pagka-click. Ito ang pinili ng spec mismo: *"Too much on the surface means Sam scans nothing properly."*
+- Filter: **Check-in requested** (ang "optional second view" ng spec) at **Friday still open**; per clinic din.
+- Summary cards: ilan ang nag-submit, ilan ang nagsara ng loop, average Effectiveness at Mojo.
+- **"Not submitted for this week"** — wala ito sa spec dahil **hindi kayang ipakita ng SharePoint list ang row na wala**. Ang physio na lumaktaw ay siya mismong kailangang makita ni Sam. Active CLINICIAN lang, at hindi kasama ang naka-`show_in_picker = false` (mga dating physio tulad ni Jesse at Tim) — kung hindi, permanenteng noise sila kada linggo.
+- Mojo **1–2** ay pula kahit saan ito lumitaw: iyon ang *"talk to me now"* band ng rubric.
+
+### Saan nakikita ang history
+- **Physio** — sa ilalim ng sariling form (`/weekly-kpi`), "My previous weeks", pinaka-bago sa itaas, i-click ang linggo para sa buong report.
+- **Sam** — bagong tab na **"Weekly KPI Reports"** sa Clinician Profile page ng bawat physio, at drill-in mula sa tracker. Iisang component lang ang ginagamit ng dalawa — iba lang ang endpoint.
+
+### Week keying — hindi ito ang grid ng CEO dashboard
+Plain **ISO week** (Monday–Sunday) ang `week_start`, **hindi** ang Week 1–4 + Remainder grid ng `week.calculator.ts`. Sinadya:
+- May Monday half at Friday half ang form. Ang "Remainder [30-31]" na column ay wala sa dalawa.
+- Hindi humihinto sa dulo ng buwan ang linggo ng physio. Kapag hinati sa dalawang row ang isang working week, mababali ang one-row-per-person-per-week — ang match key mismo ng Friday submit.
+
+Basahin ang `docs/WEEKLY_KPI_2026-08-22.md` at `docs/WEEK_GRID_2026-08-06.md` bago ito pagsamahin sa grid ng dashboard.
+
+### Tungkol sa UI (in-ayos 2026-08-24 — flat white)
+**Minimalist, flat, puti — "tulad sa Apple".** Utos ni Sam noong 2026-08-24: tinanggal lahat ng gradient, glow, dark hero band at shadow sa dalawang page. Puting surface, hairline border, at ang laki/timbang ng type ang nagdadala ng hierarchy; may kulay lang kung may kahulugan (critical mojo, hinihinging check-in, napiling kontrol). Nasa `weeklyKpi.ui.tsx` ang buong system (`PageHeader`, `Panel`, `Chip`, `RatingMeter`, segmented `PillGroup`) kaya iisa ang mukha ng form, history at tracker. Detalye sa `docs/WEEKLY_KPI_2026-08-22.md` seksyon 14.
+
+<details><summary>Ang lumang bersyon (2026-08-22, hindi na ginagamit)</summary>
+
+Ang palette, gradient, panel at accent bar noon ay **galing sa `CEOAnalyticsPage`** para pareho ang mukha nito sa buong dashboard, at nakalagay sa `weeklyKpi.ui.tsx` bilang shared primitives (`Panel`, `PanelHeader`, `PillGroup`, `Avatar`, `ProgressRing`, `EmptyState`) — iisang design ang form, ang history at ang tracker.
+- **Dark hero band** sa tracker (week + navigator + roster ring) at sa form (avatar + pangalan + clinic). Dito nakikita ang Name at Clinic ng spec — identity, hindi input.
+- **`RatingMeter` (10 segments + pangalan ng band) kapalit ng number pill.** Ang hanay ng dalawang-digit na numero ay pare-pareho ang hitsura, kaya kailangan pang basahin lahat. May **hugis** na ngayon ang bawat row, at ang "Mostly on track" / "Running empty" ang naghahatid ng kahulugan ng rubric.
+- **Kulay lang sa kailangang aksyunan:** may left stripe ang row kung critical ang mojo (pula) o may hinihingi na check-in (amber). Tahimik ang lahat ng iba, kaya kita agad ang dalawang exception.
+- Sa form, **naka-highlight ang banda ng napiling score** sa rubric at kinukuha ng napiling numero ang kulay ng banda niya.
+
+Buong detalye sa `docs/WEEKLY_KPI_2026-08-22.md` seksyon 12.
+</details>
+
+### Comment thread kada linggo (migration 033, 2026-08-24)
+Puwede nang **mag-comment si Sam sa isang na-submit na linggo, at makakasagot ang physio** — utos ni Sam 2026-08-24. Bago nito, ang sagot sa mababang mojo o sa `flag_for_sam` ay napupunta sa Teams o sa usapan, kaya wala itong bakas sa linggong pinag-uusapan.
+- **Dalawa lang ang nasa thread:** ang physio na may-ari ng report at ang super admin. **404** ang nakukuha ng kahit sinong iba — hindi 403; hindi kailangang malaman ng ibang tao kung may ganitong report. **Hindi ito nakikita ng ibang physio** — coaching ito, hindi pampublikong marka.
+- **Dalawang direksyon:** parehong panig puwedeng mag-post. **Ang may-akda lang** ang puwedeng mag-edit o mag-delete ng sarili niyang mensahe. Walang approval queue — mensahe ito na may iisang may-akda, hindi shared record.
+- Naka-audit log ang `weekly_kpi.comment.create / update / delete`.
+
+### Notification (in-app, walang Teams at walang email)
+Patay ang Teams sa prod at walang email sender, kaya ang **polled counter** ang notification — kaparehong pattern ng edit/delete approval badges (60s + on focus).
+- **Red badge** sa hub card ng physio ("Team Performance KPI Reporting") at ni Sam ("Team Performance KPI").
+- **Banner** sa itaas ng `/weekly-kpi` at ng `/my-profile`, at **`N new comments` pill** sa row ng linggo sa history + comment marker sa tracker row.
+- **Parehong panig ang na-notify:** ang physio kapag nag-comment si Sam; si Sam kapag may sumagot **sa thread na sinalihan niya** — hindi sa lahat ng report.
+- Kapag bukas na ang thread at may dumating na bagong mensahe, kusang nagre-refresh — hindi na kailangang mag-reload.
+
+### `/my-profile` — sariling profile view ng physio
+Tatlong tab: **Weekly KPI history (kasama ang thread), sariling Patient Dropouts, sariling Case Acceptance.**
+- **HINDI ito bagong page.** Iisang component (`ClinicianProfilePage`) na may `selfMode` flag ang gamit ng `/admin/clinician-profile` at ng `/my-profile` — pareho ang filters, summary cards, table at pagination. Ang unang bersyon ay hiwalay na page na may sariling UI; tama ang punto ni Sam: dalawang kopya ng iisang table ang kailangang ayusin nang dalawang beses tuwing may babaguhin.
+- Ang inaalis ng `selfMode`: **account controls** (edit profile / reset password / deactivate), **Delete button kada row** (kailangan ng ADMIN o approved delete request sa server, kaya error lang ang mangyayari), at ang **`clinician_id` sa URL** — sa session galing ang physio, kaya hindi puwedeng buksan ang profile ng kasama sa pamamagitan ng pagpalit ng URL. Nakabukas muna ang Weekly KPI tab at may banner ng bagong comment.
+- **Walang bagong backend:** matagal nang naka-pin ang CLINICIAN caller sa sariling rows ng `applyScope` sa dropout at case-acceptance repositories.
+
+### Drawer, hindi accordion (2026-08-24)
+Pag-click ng row sa tracker, **bumubukas ang report sa kanang sidebar** (560px), hindi na pababa sa loob ng table. Dati, ang pagbukas ng isang report ay nagtutulak sa lahat ng physio sa ibaba palabas ng screen — kabaligtaran ng silbi ng page na ito, na paghahambing ng tao sa loob ng isang linggo.
+- Hindi gumagalaw ang table; may accent marker sa kaliwa ng nakabukas na row para alam mo kung kanino ang panel.
+- Ang **header ng panel** ay may pangalan, Effectiveness, Mojo at status chips — nakatigil habang nag-i-scroll ang laman. Ang **footer** ay naka-pin: "Full history →" at (super admin) "Delete this week".
+- Hindi na inuulit ang scores sa loob (`compact` mode ng detail) — yun ang "ayusin mo ang format".
+- Esc o pag-click sa labas para isara.
+- **Pati sa Weekly KPI Reports tab ng Clinician Profile** (`/admin/clinician-profile` at `/my-profile`) — pag-click ng linggo, sa sidebar din lumalabas. Nakatago doon ang "Full history →" dahil nandoon ka na nga.
+- **Pababa pa rin sa form page ng physio** (`/weekly-kpi`, "Previous weeks") — form yun na may history sa ilalim, hindi listahang sinusuyod. Isang flag lang kung gusto mo ring i-drawer.
+
+### Confirm bago mag-submit (2026-08-24)
+May **"are you sure"** na bago mag-save — **pareho sa Monday at Friday** ("basta lagi", kaya pareho).
+- Lumalabas **pagkatapos** ng field validation, hindi bago — para hindi ka pa tinatanong sa bagay na tatanggihan din pala ng form.
+- **Nakasulat sa dialog ang mga sagot na aaksyunan ni Sam** — Effectiveness, Mojo at check-in sa Monday; goal achieved sa Friday. Hindi lang "are you sure?": ang bare na confirm ay natututunang pindutin agad, ang may numero ay huling pagkakataong mahuli ang maling pindot sa 1–10.
+- Kapag pag-uulit, sinasabi nito nang diretso: "This replaces what you submitted on …". Ang mga button ay `Submit Monday` / `Update Friday` / `Keep editing` — hindi OK/Cancel.
+
+### Delete (2026-08-24) — super admin lang
+Puwede nang **burahin ni super admin ang isang buong weekly report** (`DELETE /api/weekly-kpi/:id`). Binabaligtad nito ang "walang delete — history ito" **para sa isang role lang**.
+- **Permanente**, gaya ng lahat ng delete sa app — walang soft delete kahit saan dito. Kasama ang **buong comment thread** ng linggong iyon (ON DELETE CASCADE).
+- **Audit log ang natitirang bakas:** `weekly_kpi.delete` — id, pangalan ng physio, linggo, kung may Friday half na, at ilan ang comment na nabura kasama nito.
+- **Hindi puwede ang physio** kahit sarili niyang linggo: ang kasalukuyang linggo ay tinatama sa pag-re-submit, at frozen ang mga nakaraan. Walang delete-request queue — iisang account lang ang hihiling at aaprub.
+- Sa UI: nasa **loob ng nakabukas na row lang** (tracker o history), kulay abo hanggang i-hover, at nakasulat sa confirm ang pangalan, ang linggo at ang bilang ng comment na kasamang mabubura.
+- **Ang comment delete ay author-only pa rin** — hindi mo mabubura ang sagot ng physio, hindi niya mabubura ang comment mo.
+
+### Hindi pa ginawa (sinadya)
+- **Teams / Power Automate / SharePoint** — utos ni Sam na dashboard muna.
+- **Monday at Friday reminders** — walang nagtutulak ng card sa physio; sila ang pumapasok sa hub card. Ang "Not submitted" na listahan ang pansamantalang panghalili.
+- **Pilot scoping sa Brookvale** (spec section 9) — bukas ito sa lahat ng clinic ngayon. Kung Brookvale-lang muna ang gusto, sabihin lang — isang gate lang ang kailangan.
+
 ---
 
 ### API Endpoints (reference)
@@ -179,5 +290,6 @@ Hand-typed ang Ageing Debts sa CEO dashboard, hindi hinihila sa Nookal. **Binago
 - **Case Acceptance:** `/api/case-acceptance` (CRUD), `/summary`, `/export`, `/check-duplicate`
 - **Ad Leads:** `/api/ad-leads` (CRUD), `/summary`, `/check-duplicate`
 - **Ad Spend:** `/api/ad-spend` (CRUD), `/summary`, `/weekly-report`, `/sync-facebook`, `/sync-google`
+- **Weekly KPI:** `/api/weekly-kpi/me`, `/me/history`, `/me/unread`, `/monday`, `/friday`, `/tracker`, `/clinician/:id/history`, `/:id`, `/:id` (DELETE, admin), `/:id/comments` (GET/POST), `/:id/comments/read`, `/comments/:commentId` (PATCH/DELETE)
 - **Audit Log:** `/api/audit-log`, `/actions`
 - **Health:** `/api/health`
